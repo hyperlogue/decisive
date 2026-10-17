@@ -1,0 +1,92 @@
+{
+  "laya_sdk": {
+    "repository": "https://github.com/NandhaKishorM/laya",
+    "revision": "1adc59f7e371deb601fcfa18a14e25db238addcc"
+  },
+  "llama_cpp": {
+    "repository": "https://github.com/ggml-org/llama.cpp",
+    "revision": "781dbc5ac98921dbdb5e5b2ec5b7a50960e937d4",
+    "ref": "upstream HEAD fetched 2026-10-10",
+    "previous_baseline": {
+      "revision": "d81235049384534c167caea52b85a694f6103d14",
+      "tag": "v0.6.0"
+    }
+  },
+  "models": {
+    "english": {
+      "repository": "convaiinnovations/laya",
+      "revision": "7b928d828b7b0e022f929d9bd2e44165aa270148"
+    },
+    "multilingual": {
+      "repository": "convaiinnovations/laya-multilingual",
+      "revision": "1720e3e3357cfe1e281542e223f8273b0890ca34"
+    },
+    "typed-decisions": {
+      "repository": "convaiinnovations/laya-typed-decisions",
+      "revision": "e929ae5cf69bc34259cd2f95c9e91145b818b1f0"
+    },
+    "jev-style-0.8b-v3": {
+      "repository": "chaoliangUNSW/Jev-Style-0.8B-Decision-v3",
+      "revision": "b023d1f9c7858fbf01504577a3bfc349ea5c7385"
+    },
+    "kev-0.8b": {
+      "repository": "jaredpalmer/kev-0.8b",
+      "revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+      "base_repository": "Qwen/Qwen3.5-0.8B-Base",
+      "base_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
+    },
+    "pplx_flash": {
+      "repository": "perplexity-ai/pplx-decider-flash-v1.2",
+      "revision": "6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d",
+      "base_model": "Qwen/Qwen3.5-4B",
+      "source": "checkpoint source/src/pplx_decider",
+      "scope": "text-only, experimental",
+      "attention": "noncausal_full_attention",
+      "precision": "BF16 source storage and FP32 computation by default; optional native grouped W8A8 INT8 projections",
+      "format": "joint-question-inline-readout-v1 protocol 3"
+    }
+  },
+  "reference_environment": {
+    "python": "3.13.13",
+    "torch": "2.8.0+cpu",
+    "transformers": "4.57.6",
+    "tokenizers": "0.22.2",
+    "safetensors": "0.6.2",
+    "numpy": "2.3.3"
+  },
+  "evaluation_dataset": {
+    "repository": "https://huggingface.co/datasets/LocalLLaMA/typed-decisions",
+    "revision": "e039ebffcc280174dd354227424fb2b249f191de",
+    "configuration": "all",
+    "split": "test",
+    "selection": "first four rows of each of the four workflows, selected before evaluation",
+    "requests": 16,
+    "decisions_per_checkpoint": 80,
+    "license": "Apache-2.0"
+  },
+  "acceptance": {
+    "maximum_absolute_probability_error": 0.0001,
+    "maximum_absolute_confidence_error": 0.0001,
+    "maximum_range_normalized_score_error": 0.0001,
+    "allowed_discrete_disagreements": 0,
+    "allowed_task_quality_regression": 0
+  },
+  "jev_sdk": {
+    "repository": "https://github.com/lawrence3699/jev-style",
+    "revision": "ef86def93c4b8c775523bea6812784a36b2b6d8a"
+  },
+  "kev_sdk": {
+    "repository": "https://github.com/jaredpalmer/kev",
+    "revision": "85ccf56a0afb952323c621055b02876e8498d60c"
+  },
+  "causal_reference_environment": {
+    "python": "3.13.13",
+    "torch": "2.8.0+cpu",
+    "transformers": "5.17.0",
+    "peft": "0.21.0",
+    "dtype": "float32",
+    "attention": "eager",
+    "delta_rule": "reference PyTorch implementation",
+    "quality_scope": "synthetic SDK compatibility fixtures; not a labeled quality benchmark"
+  }
+}

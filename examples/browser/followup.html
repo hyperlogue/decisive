@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8"><title>Decisive browser follow-up correctness check</title>
+<pre id="status">Loading the pinned English checkpoint…</pre>
+<script type="module">
+import init, { BrowserRuntime } from '/artifacts/web/pkg/decisive.js';
+const status = message => { document.querySelector('#status').textContent = message; window.progress = message; };
+try {
+  await init();
+  const lines = async path => (await (await fetch(path)).text()).trim().split('\n').map(JSON.parse);
+  const requests = await lines('/benches/followup-inputs.jsonl');
+  const reference = await lines('/tests/fixtures/outputs/followup-inputs.jsonl');
+  const runtime = new BrowserRuntime();
+  let unloadedError = false;
+  try { runtime.token_cache_stats(); } catch { unloadedError = true; }
+  if (!unloadedError) throw Error('stats before loading must fail');
+  await runtime.load(location.origin + '/models/laya', true);
+  const outputs = [];
+  status('Checking 512-token cache-off prediction…');
+  outputs.push({ request: 0, cache: 'off', output: JSON.parse(runtime.predict(JSON.stringify(requests[0]))) });
+  runtime.set_token_cache_capacity(4096);
+  status('Checking 512-token token-only prediction…');
+  outputs.push({ request: 0, cache: 'token', output: JSON.parse(runtime.predict(JSON.stringify(requests[0]))),
+    token_stats: JSON.parse(runtime.token_cache_stats()) });
+  runtime.set_state_cache_capacity(4096);
+  for (const index of [0, 1]) {
+    status('Checking cached prediction ' + index + '…');
+    outputs.push({ request: index, cache: 'both', output: JSON.parse(runtime.predict(JSON.stringify(requests[index]))),
+      token_stats: JSON.parse(runtime.token_cache_stats()), state_stats: JSON.parse(runtime.state_cache_stats()) });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  if (outputs[2].state_stats.builds !== 1 || outputs[3].state_stats.hits !== 1) throw Error('expected cold state build followed by one state hit');
+  const records = outputs.map(record => ({ ...record, reference: reference[record.request] }));
+  runtime.set_token_cache_capacity(0); runtime.set_state_cache_capacity(0);
+  const disabled = { token: JSON.parse(runtime.token_cache_stats()), state: JSON.parse(runtime.state_cache_stats()) };
+  if (disabled.token.retained_bytes || disabled.state.retained_bytes) throw Error('disabling must release cache buffers');
+  runtime.unload();
+  window.result = { correctness_only: true, scope: 'Browser Wasm SIMD128, FP16 weights, Rust portable kernels. Four predictions around512tokens: uncached original, token-only original, cold state-cache original, changed-question state hit. SDK comparison is performed separately; this is not a browser speed benchmark or a full browser task-quality gate.', unloaded_stats_rejected: unloadedError, token_only_exact_output: JSON.stringify(outputs[0].output) === JSON.stringify(outputs[1].output), records, disabled };
+  status('Browser predictions collected for SDK comparison.');
+} catch (error) { window.result = { error: String(error), progress: window.progress }; status(String(error)); }
+</script>

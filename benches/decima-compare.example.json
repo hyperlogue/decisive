@@ -1,0 +1,29 @@
+[
+  {
+    "name": "before-int8",
+    "executable": "benchmark-runs/bin/decisive-before",
+    "model": "models/decima-small",
+    "precision": "int8",
+    "args": [
+      "decima"
+    ]
+  },
+  {
+    "name": "after-int8",
+    "executable": "benchmark-runs/bin/decisive-after",
+    "model": "models/decima-small",
+    "precision": "int8",
+    "args": [
+      "decima"
+    ]
+  },
+  {
+    "name": "after-f32",
+    "executable": "benchmark-runs/bin/decisive-after",
+    "model": "models/decima-small",
+    "precision": "f32",
+    "args": [
+      "decima"
+    ]
+  }
+]

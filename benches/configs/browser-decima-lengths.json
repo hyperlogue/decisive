@@ -1,0 +1,15 @@
+{
+  "repetitions": 4,
+  "warmup": 2,
+  "rounds": 7,
+  "cases": [
+    {
+      "name": "reference",
+      "page": "/examples/browser/platform.html?backend=wasm&model=decima&package=%2Fartifacts%2Fweb%2Fpkg-reference&input=%2Fbenches%2Fdecima-lengths.jsonl&suite=raw&indices=all&cache=off&initial_warmup=12&precision=f32&rules=%7B%22bands%22%3A%5B%5D%2C%22fallback%22%3A%7B%22projection_rows%22%3A4%2C%22attention_scores%22%3A4096%7D%7D"
+    },
+    {
+      "name": "candidate",
+      "page": "/examples/browser/platform.html?backend=wasm&model=decima&package=%2Fartifacts%2Fweb%2Fpkg-candidate&input=%2Fbenches%2Fdecima-lengths.jsonl&suite=raw&indices=all&cache=off&initial_warmup=12&precision=f32&rules=%7B%22bands%22%3A%5B%5D%2C%22fallback%22%3A%7B%22projection_rows%22%3A3%2C%22attention_scores%22%3A4096%7D%7D"
+    }
+  ]
+}

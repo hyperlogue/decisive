@@ -1,0 +1,59 @@
+<!doctype html><meta charset="utf-8"><title>Decima WebGPU readout parity</title>
+<pre id="status">Starting…</pre>
+<script type="module">
+const query = new URLSearchParams(location.search);
+const status = text => { window.progress = text; document.querySelector('#status').textContent = text; };
+try {
+  const names = (query.get('variants') || 'reference,candidate').split(',');
+  if (names.length !== 2 || names.some(n => !/^[a-z0-9-]+$/.test(n))) throw Error('Invalid variants');
+  const files = [];
+  for (const file of ['decima.json','encoder/config.json','encoder/tokenizer.json','encoder/model.safetensors','head.safetensors']) {
+    status('Downloading ' + file);
+    const response = await fetch('/models/decima-small/pytorch/' + file);
+    if (!response.ok) throw Error('Missing checkpoint: ' + file);
+    files.push(new Uint8Array(await response.arrayBuffer()));
+  }
+  const models = [], packages = [];
+  for (const name of names) {
+    status('Loading ' + name);
+    const path = '/artifacts/web/pkg-' + name;
+    let moduleName, response;
+    for(moduleName of ['decisive','disco','beam']){
+     response=await fetch(path+'/'+moduleName+'_bg.wasm',{cache:'no-store'});
+     if(response.status!==404)break;
+    }
+    if (!response.ok) throw Error('Missing Wasm package');
+    const bytes = await response.arrayBuffer();
+    const wasm_sha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
+    const api = await import(path + '/' + moduleName + '.js');
+    await api.default({module_or_path: bytes});
+    models.push(await api.DecimaWebGpuModel.create(...files));
+    packages.push({name, module:moduleName, wasm_sha256});
+  }
+  files.length = 0;
+  const fixtures = (await (await fetch('/benches/decima-systemone.jsonl')).text()).trim().split('\n').map(JSON.parse);
+  const raw = (await (await fetch('/benches/decima-reference.jsonl')).text()).trim().split('\n').map(JSON.parse);
+  const records = [];
+  async function exact(name, run) {
+    status(name);
+    const outputs = [];
+    for (const model of models) outputs.push(JSON.parse(await run(model)));
+    if (JSON.stringify(outputs[0]) !== JSON.stringify(outputs[1])) throw Error('WebGPU output differs: ' + name);
+    records.push({case: name, output: outputs[0]});
+  }
+  for (const kind of ['choice', 'rank', 'noul', 'score']) {
+    const question = {...raw[0].question, kind};
+    if (kind === 'noul') question.choices = ['yes', 'no'];
+    for (const cache of ['cold', 'warm']) {
+      await exact(kind + '-' + cache, m => m.decide(raw[0].state, JSON.stringify(question)));
+    }
+  }
+  for (const [index, fixture] of fixtures.entries()) {
+    const request = fixture.request_json ?? JSON.stringify(fixture.request);
+    await exact('systemone-' + index, m => m.predict(request));
+  }
+  for (const model of models) model.free();
+  window.result = {all_exact: true, compared: records.length, packages, records, scope: 'WebGPU execution parity only; software adapters give no GPU performance evidence.'};
+  status('Complete');
+} catch (error) { window.result = {error: String(error), stack: error.stack}; status(String(error)); }
+</script>

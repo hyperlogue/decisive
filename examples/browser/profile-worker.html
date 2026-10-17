@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Browser worker profiler smoke check</title>
+<script type="module">
+const source=`onmessage=()=>{let result=0;function work(){for(let i=0;i<50000000;i++)result+=Math.sqrt(i%127);}work();postMessage(result);};postMessage('ready');`;
+const worker=new Worker(URL.createObjectURL(new Blob([source],{type:'application/javascript'})));
+const wait=async flag=>{while(!window[flag])await new Promise(r=>setTimeout(r,10));};
+worker.onmessage=async({data})=>{
+ if(data==='ready'){window.profileReady=true;await wait('profileStarted');worker.postMessage('start');}
+ else {window.profileDone=true;await wait('profileStopped');window.result={records:[{value:data}]};worker.terminate();}
+};
+worker.onerror=e=>window.result={error:e.message};
+</script>

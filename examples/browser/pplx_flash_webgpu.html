@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>Pplx Flash WebGPU kernel parity</title>
+<pre id="status">Loading…</pre>
+<script type="module">
+try {
+ const q=new URLSearchParams(location.search),pkg=q.get('package');
+ if(!pkg?.startsWith('/artifacts/web/'))throw Error('Local package required');
+ if(q.get('worker')==='1') {
+   const url=URL.createObjectURL(new Blob([`
+     import init,{pplxFlashWebGpuCheck} from ${JSON.stringify(new URL(pkg+'/decisive.js',location.href).href)};
+     try { await init();postMessage(JSON.parse(await pplxFlashWebGpuCheck())); }
+     catch(error) {postMessage({error:String(error)});}
+   `],{type:'text/javascript'}));
+   const worker=new Worker(url,{type:'module'});
+   try {window.result=await new Promise((resolve,reject)=>{worker.onmessage=e=>resolve(e.data);worker.onerror=e=>reject(Error(e.message));});}
+   finally {worker.terminate();URL.revokeObjectURL(url);}
+ } else {
+   const api=await import(pkg+'/decisive.js');await api.default();
+   window.result=JSON.parse(await api.pplxFlashWebGpuCheck());
+ }
+} catch(error) { window.result={error:String(error)}; }
+document.querySelector('#status').textContent=JSON.stringify(window.result,null,2);
+</script>

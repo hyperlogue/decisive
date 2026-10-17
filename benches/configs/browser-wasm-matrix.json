@@ -1,0 +1,31 @@
+{
+  "repetitions": 3,
+  "warmup": 2,
+  "rounds": 7,
+  "cases": [
+    {
+      "name": "decima-short-reference",
+      "page": "/examples/browser/platform.html?backend=wasm&package=/artifacts/web/pkg-reference&cache=off&model=decima&suite=raw&indices=0&initial_warmup=12"
+    },
+    {
+      "name": "decima-short-candidate",
+      "page": "/examples/browser/platform.html?backend=wasm&package=/artifacts/web/pkg-candidate&cache=off&model=decima&suite=raw&indices=0&initial_warmup=12"
+    },
+    {
+      "name": "decima-512-reference",
+      "page": "/examples/browser/platform.html?backend=wasm&package=/artifacts/web/pkg-reference&cache=off&model=decima&suite=raw&indices=37&initial_warmup=12"
+    },
+    {
+      "name": "decima-512-candidate",
+      "page": "/examples/browser/platform.html?backend=wasm&package=/artifacts/web/pkg-candidate&cache=off&model=decima&suite=raw&indices=37&initial_warmup=12"
+    },
+    {
+      "name": "laya-512-reference",
+      "page": "/examples/browser/platform.html?backend=wasm&package=/artifacts/web/pkg-reference&cache=off&model=laya&input=/benches/long-inputs.jsonl&expected=/tests/fixtures/outputs/long-inputs.jsonl&indices=0"
+    },
+    {
+      "name": "laya-512-candidate",
+      "page": "/examples/browser/platform.html?backend=wasm&package=/artifacts/web/pkg-candidate&cache=off&model=laya&input=/benches/long-inputs.jsonl&expected=/tests/fixtures/outputs/long-inputs.jsonl&indices=0"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8"><title>Decisive Perplexity Flash Wasm smoke benchmark</title><pre id="status">Loading…</pre>
+<script type="module">
+import {loadFlash} from '/examples/pplx-flash/runtime.js';
+const status=s=>{window.progress=s;document.querySelector('#status').textContent=s;};
+try{
+ const q=new URLSearchParams(location.search),pkg=q.get('package')||'/artifacts/web/pkg-pplx-flash';
+ if(!pkg.startsWith('/artifacts/web/'))throw Error('Local package required');
+ const api=await import(pkg+'/decisive.js');
+ const bytes=await(await fetch(pkg+'/decisive_bg.wasm')).arrayBuffer();
+ const wasm_sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
+ const wasm=await api.default({module_or_path:bytes});
+ const build=await(await fetch(pkg+'/build.json')).json();
+ const engine=await loadFlash(api,'/models/pplx-decider-flash-v1.2',status,q.get('backend')||'wasm');
+ const fixture=q.get('fixture')||'request';
+ if(!['request','multilingual'].includes(fixture))throw Error('Unknown fixture');
+ const request=await(await fetch('/tests/fixtures/pplx_flash/'+fixture+'.json')).json();
+ const result=await engine.predict(request,2048,q.get('prefetch')!=='0');
+ const report={...result,wasm_sha256,features:build.features,fixture,wasm_memory_bytes:wasm.memory.buffer.byteLength,precision:'bf16-storage-f32-compute',backend:q.get('backend')==='webgpu'?'webgpu':build.features.includes('pplx-wasm-fma')?'wasm-relaxed-simd':'wasm-simd128',threads:1};
+ const reference=await(await fetch('/tests/fixtures/pplx_flash/reference.json')).json();
+ const expected=reference.cases.find(c=>JSON.stringify(c.request)===JSON.stringify(request));
+ if(!expected)throw Error('Missing reference fixture');
+ let max_error=0;
+ const compare=(a,b)=>{
+   if(typeof b==='number'){if(!Number.isFinite(a))throw Error('Nonfinite output');max_error=Math.max(max_error,Math.abs(a-b));}
+   else if(b!==null&&typeof b==='object'){for(const k of Object.keys(b))compare(a?.[k],b[k]);}
+   else if(a!==b)throw Error('Output mismatch: '+a+' / '+b);
+ };
+ compare(result.response,expected.response);
+ if(max_error>1e-4)throw Error('Reference probability error: '+max_error);
+ window.result={...report,reference_max_error:max_error};
+ status(JSON.stringify(window.result,null,2));engine.dispose();
+}catch(e){window.result={error:String(e),progress:window.progress};status(String(e));}
+</script>

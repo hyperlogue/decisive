@@ -1,0 +1,49 @@
+<!doctype html><meta charset="utf-8"><title>Decima browser contract check</title>
+<pre id="status">Loading Decima…</pre>
+<script type="module">
+import init, { DecimaModel } from '/artifacts/web/pkg/decisive.js';
+const status = s => { window.progress=s; document.querySelector('#status').textContent=s; };
+try {
+  await init();
+  const files=['decima.json','encoder/config.json','encoder/tokenizer.json','encoder/model.safetensors','head.safetensors'];
+  const bytes=[];
+  for (const file of files) {
+    status('Downloading '+file);
+    const response=await fetch('/models/decima-small/pytorch/'+file);
+    if(!response.ok) throw Error('Download failed: '+file);
+    bytes.push(new Uint8Array(await response.arrayBuffer()));
+  }
+  const fixtures=(await (await fetch('/benches/decima-systemone.jsonl')).text()).trim().split('\n').map(JSON.parse);
+  const precision=new URLSearchParams(location.search).get('precision')||'f32';
+  status('Constructing '+precision+' model');
+  const model=new DecimaModel(...bytes,precision);
+  const records=[];
+  for (const i of [0,7]) {
+    status('Predicting fixture '+i+' ('+precision+')');
+    const request=JSON.stringify(fixtures[i].request);
+    const output=JSON.parse(model.predict(request));
+    const cached=JSON.parse(model.predict(request));
+    if(JSON.stringify(cached)!==JSON.stringify(output))throw Error('Cache changed the result');
+    records.push({fixture:i,output,reference:fixtures[i].expected,cache_exact:true});
+    await new Promise(resolve=>setTimeout(resolve,0));
+  }
+  const questions={q:{type:'choice',instructions:'Does the state contain numeric values?',criteria:['yes','no']}};
+  const structured='{"state":{"small":1e-7,"large":1e16,"negative_zero":-0.0},"questions":'+JSON.stringify(questions)+'}';
+  const rendered=JSON.stringify({state:'{"small": 1e-07, "large": 1e+16, "negative_zero": -0.0}',questions});
+  if(model.predict(structured)!==model.predict(rendered))throw Error('Numeric JSON rendering differs from the Python contract');
+  let boundary=null;
+  if(new URLSearchParams(location.search).has('boundary')) {
+    status('Predicting exactly 512 state tokens ('+precision+')');
+    const rows=(await (await fetch('/benches/decima-reference.jsonl')).text()).trim().split('\n').map(JSON.parse);
+    const fixture=rows.find(r=>r.id==='boundary-512');
+    const q=fixture.question;
+    const output=JSON.parse(model.predict(JSON.stringify({state:fixture.state,lang:q.lang,questions:{q:{type:'choice',instructions:q.text,criteria:q.choices}}})));
+    const p=Object.values(output.answers.q.probabilities);
+    const error=Math.max(...p.map((v,i)=>Math.abs(v-fixture.expected[i])));
+    if(error>(precision==='f32'?0.0001:0.02))throw Error('512-token probability drift: '+error);
+    boundary={tokens:512,max_probability_error:error,output};
+  }
+  model.free();
+  window.result={correctness_only:true,precision,records,numeric_json_equivalent:true,boundary};status('Complete');
+} catch(error) {window.result={error:String(error),progress:window.progress};status(String(error));}
+</script>

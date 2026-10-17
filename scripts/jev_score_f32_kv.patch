@@ -1,0 +1,20 @@
+--- a/jev_score.cpp
++++ b/jev_score.cpp
+@@ -320,6 +320,8 @@
+     S.model = llama_model_load_from_file(model_path.c_str(), mp);
+     if (!S.model) { std::cout << json{{"ready", false}, {"error", "model load failed"}}.dump() << std::endl; return 1; }
+     llama_context_params cp = llama_context_default_params();
++    cp.type_k = GGML_TYPE_F32;
++    cp.type_v = GGML_TYPE_F32;
+     cp.n_ctx = n_ctx;
+     cp.n_batch = n_ctx;
+     cp.n_ubatch = std::min(n_ubatch, n_ctx);
+@@ -342,6 +344,8 @@
+     llama_model_desc(S.model, desc, sizeof(desc));
+     std::cout << json{{"ready", true}, {"n_ctx", S.n_ctx}, {"n_batch", S.n_batch}, {"n_ubatch", cp.n_ubatch}, {"n_seq_max", S.n_seq_max}, {"n_outputs_max", S.n_outputs_max},
+                       {"n_vocab", S.n_vocab}, {"desc", desc}, {"load_ms", ms_since(t0)},
++                      {"cache_type_k", ggml_type_name(cp.type_k)},
++                      {"cache_type_v", ggml_type_name(cp.type_v)},
+                       {"system_info", llama_print_system_info()}}.dump() << std::endl;
+ 
+     std::string line;

@@ -1,0 +1,1400 @@
+[
+  {
+    "state": null,
+    "expected": {
+      "script": "unknown",
+      "script_profile": {},
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "",
+    "expected": {
+      "script": "unknown",
+      "script_profile": {},
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "123 + 456",
+    "expected": {
+      "script": "unknown",
+      "script_profile": {},
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "hello",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "This is the request that I would like you to check.",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "en",
+      "is_english": true,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "Ich brauche Hilfe mit meiner Rechnung und ich habe eine Frage.",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "de",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "Je voudrais savoir si vous avez reçu le paiement.",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "fr",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0204,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "Por favor quiero cancelar mi pedido porque ya no lo necesito.",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "es",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "Kan jag inte få hjälp med fakturan?",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "sv",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0571,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "NEJ JA OM VI",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "JAG BEHÖVER HJÄLP MED FAKTURAN",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "sv",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0667,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "const x = fn(var);",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "test@example.invalid and abc.xyz is a token",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "en",
+      "is_english": true,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "Θελω να ακυρωσω την παραγγελια μου",
+    "expected": {
+      "script": "greek",
+      "script_profile": {
+        "greek": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 1.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "أريد استرداد المبلغ لأن المنتج معطل",
+    "expected": {
+      "script": "arabic",
+      "script_profile": {
+        "arabic": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 1.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "我想取消订单并申请退款",
+    "expected": {
+      "script": "han",
+      "script_profile": {
+        "han": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 1.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "商品の返品をしたいです",
+    "expected": {
+      "script": "kana",
+      "script_profile": {
+        "han": 0.36363636363636365,
+        "kana": 0.6363636363636364
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 1.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "환불을 요청하고 싶습니다",
+    "expected": {
+      "script": "hangul",
+      "script_profile": {
+        "hangul": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 1.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "मुझे अपनी खरीद का पैसा वापस चाहिए",
+    "expected": {
+      "script": "devanagari",
+      "script_profile": {
+        "devanagari": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 1.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "Пожалуйста верните деньги за сломанный товар",
+    "expected": {
+      "script": "cyrillic",
+      "script_profile": {
+        "cyrillic": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 1.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "İ Ⅰ ² é é Ж",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 0.75,
+        "cyrillic": 0.25
+      },
+      "language": "pt",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0769,
+      "non_latin_fraction": 0.25,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": {
+      "meta": "This is the message that you requested.",
+      "message": "Je voudrais savoir si vous avez reçu le paiement."
+    },
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "fr",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0112,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": "Je voudrais savoir si vous avez reçu le paiement."
+    }
+  },
+  {
+    "state": [
+      "The status is ready and the user is waiting.",
+      "أريد استرداد المبلغ لأن المنتج معطل"
+    ],
+    "expected": {
+      "script": "arabic",
+      "script_profile": {
+        "latin": 0.5384615384615384,
+        "arabic": 0.46153846153846156
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.4615,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": {
+      "summary": "This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. This is the summary of the request. ",
+      "message": "Ich brauche Hilfe mit meiner Rechnung und ich habe eine Frage."
+    },
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "de",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": {
+      "a": {
+        "b": {
+          "c": {
+            "d": {
+              "e": {
+                "f": {
+                  "g": "Ich brauche Hilfe mit meiner Rechnung und ich habe eine Frage."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "script": "unknown",
+      "script_profile": {},
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "This is a message in English.\nJe voudrais savoir si vous avez reçu le paiement.",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "fr",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0127,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": "Je voudrais savoir si vous avez reçu le paiement."
+    }
+  },
+  {
+    "state": "for are",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "FOR ARE",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "on not it from",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "en",
+      "is_english": true,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "ON NOT IT FROM",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "en",
+      "is_english": true,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "can but were are and as you for",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "en",
+      "is_english": true,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "CAN BUT WERE ARE AND AS YOU FOR",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "en",
+      "is_english": true,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "veux avec",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "VEUX AVEC",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "je ta la tout",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "fr",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "JE TA LA TOUT",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "mois alors et tes fait elle comment dois",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "fr",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "MOIS ALORS ET TES FAIT ELLE COMMENT DOIS",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "fr",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "zum und",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "ZUM UND",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "einer das bitte habe",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "de",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "EINER DAS BITTE HABE",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "de",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "das für werden zum meiner dir wann auf",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "de",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0263,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "DAS FÜR WERDEN ZUM MEINER DIR WANN AUF",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "de",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0263,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "todo eso",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "TODO ESO",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "se el necesito que",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "es",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "SE EL NECESITO QUE",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "es",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "hay donde aquí por ese ser esto con",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "es",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0286,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "HAY DONDE AQUÍ POR ESE SER ESTO CON",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "es",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0286,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "estamos cadê",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0833,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "ESTAMOS CADÊ",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0833,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "minha ficou ninguém que",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "pt",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0435,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "MINHA FICOU NINGUÉM QUE",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "pt",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0435,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "é meu do meus mas então ser eu",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "pt",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0667,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "É MEU DO MEUS MAS ENTÃO SER EU",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "pt",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0667,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "voglio ci",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "VOGLIO CI",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "tra uno del si",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "it",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "TRA UNO DEL SI",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "ed dei per mia già stato di ieri",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "it",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0312,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "ED DEI PER MIA GIÀ STATO DI IERI",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "it",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0312,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "dat maar",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "DAT MAAR",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "dat niet op met",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "nl",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "DAT NIET OP MET",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "deze is niet wordt worden maar voor van",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "nl",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "DEZE IS NIET WORDT WORDEN MAAR VOOR VAN",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "nl",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "uppdaterats göra",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0625,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "UPPDATERATS GÖRA",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0625,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "kvittot gör kommer till",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "sv",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0435,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "KVITTOT GÖR KOMMER TILL",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "sv",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0435,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "sparningen oppnar inställningen dessa kraschar kommer behöver ska",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "sv",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0308,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "SPARNINGEN OPPNAR INSTÄLLNINGEN DESSA KRASCHAR KOMMER BEHÖVER SKA",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "sv",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0308,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "această acesta",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0714,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "ACEASTĂ ACESTA",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.0714,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "acum să ale și",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "ro",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.1429,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "ACUM SĂ ALE ȘI",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.1429,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "trebuie fără sunt acest fost vreau în lui",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "ro",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0732,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "TREBUIE FĂRĂ SUNT ACEST FOST VREAU ÎN LUI",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "ro",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0732,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "kothay ekta",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "KOTHAY EKTA",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": true,
+      "language_undecided": true,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "moddhe ajke shomossa theke",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "bn",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "MODDHE AJKE SHOMOSSA THEKE",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "bn",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "bhai shomossa koto tumi geche parchina jodi hocche",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "bn",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "BHAI SHOMOSSA KOTO TUMI GECHE PARCHINA JODI HOCCHE",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "bn",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.0,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "sonra də",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.125,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "SONRA DƏ",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.125,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "ucun amma ilə və",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "az",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.125,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "UCUN AMMA ILƏ VƏ",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": null,
+      "is_english": false,
+      "language_undecided": true,
+      "diacritic_rate": 0.125,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "eger və bu lakin üçün görə deyil olmasa",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "az",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.1538,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  },
+  {
+    "state": "EGER VƏ BU LAKIN ÜÇÜN GÖRƏ DEYIL OLMASA",
+    "expected": {
+      "script": "latin",
+      "script_profile": {
+        "latin": 1.0
+      },
+      "language": "az",
+      "is_english": false,
+      "language_undecided": false,
+      "diacritic_rate": 0.1538,
+      "non_latin_fraction": 0.0,
+      "mixed_segment": null
+    }
+  }
+]

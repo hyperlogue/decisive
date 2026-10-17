@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>Decisive paired Decima worker benchmark</title>
+<pre id="status">Starting worker…</pre><script type="module">
+const worker=new Worker('./decima-thread-pair.js'+location.search,{type:'module'});
+worker.onmessage=({data})=>{
+ if(data.progress){window.progress=data.progress;document.querySelector('#status').textContent=data.progress;}
+ if(data.result){window.result=data.result;worker.terminate();}
+};
+worker.onerror=e=>{window.result={error:e.message};worker.terminate();};
+</script>

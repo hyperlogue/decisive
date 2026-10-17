@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><title>Decisive Wasm kernel accuracy</title><pre id="status">Loading…</pre>
+<script type="module">
+const status=s=>{window.progress=s;document.querySelector('#status').textContent=s;};
+try {
+ const pkg=new URLSearchParams(location.search).get('package')||'/artifacts/web/pkg';
+ if(!pkg.startsWith('/artifacts/web/'))throw Error('Use a local Wasm package');
+ let moduleName, response;
+ for(moduleName of ['decisive','disco','beam']){
+  response=await fetch(pkg+'/'+moduleName+'_bg.wasm',{cache:'no-store'});
+  if(response.status!==404)break;
+ }
+ if(!response.ok)throw Error('Wasm download failed: '+response.status);
+ const bytes=await response.arrayBuffer();
+ const api=await import(pkg+'/'+moduleName+'.js?build='+Date.now());
+ const wasm_sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
+ await api.default({module_or_path:bytes});status('Checking projection tails and one million exponential values per model…');
+ window.result={module:moduleName,wasm_sha256,checks:JSON.parse(api.wasmKernelChecks())};status('Complete');
+} catch(error){window.result={error:String(error),progress:window.progress};status(String(error));}
+</script>

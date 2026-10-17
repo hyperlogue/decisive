@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>Decima worker initialization contract</title>
+<pre id="status">Checking initialization…</pre><script type="module">
+const q=new URLSearchParams(location.search);
+const pkg=q.get('package')||'/artifacts/web/pkg-decima-threads';
+try{
+ if(!pkg.startsWith('/artifacts/web/')||pkg.includes('..'))throw Error('Package must be local');
+ const api=await import(pkg+'/decisive.js');await api.default();
+ let rejected=false;
+ try{await api.initDecimaThreadPool(2);}catch(e){rejected=String(e).includes('dedicated Web Worker');}
+ if(!rejected)throw Error('Main-thread initialization should reject clearly');
+ const worker=new Worker('./decima-threads-init.js'+location.search,{type:'module'});
+ worker.onmessage=({data})=>{
+  window.result=data.error?data:{records:[{case:'main-thread-rejected'},...data.records],shared_memory:data.shared_memory};
+  document.querySelector('#status').textContent=data.error||'Complete';worker.terminate();
+ };
+ worker.onerror=e=>{window.result={error:e.message};worker.terminate();};
+}catch(e){window.result={error:String(e)};}
+</script>

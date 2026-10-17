@@ -1,0 +1,29 @@
+{
+  "checkpoint": {
+    "repository": "amyrmahdy/decima-small",
+    "revision": "14d09cabc1b4e23106ae4413eef852a568ced77b"
+  },
+  "sdk": {
+    "repository": "https://github.com/amyrmahdy/decima",
+    "revision": "0ab6f2164abb34caa749f31ac643801d1b4b03b7"
+  },
+  "oracle": {
+    "implementation": "decima.model.Decima and decima.systemone.system_one",
+    "torch": "2.8.0+cpu",
+    "transformers": "4.57.6",
+    "precision": "float32",
+    "threads": 1,
+    "device": "cpu"
+  },
+  "corpus": "Synthetic regression examples written for this project; 38 raw probability cases, 37 independently assigned simple gold labels, 11 System One requests. Ten languages. Not a representative production quality evaluation.",
+  "files": {
+    "decima-reference.jsonl": {
+      "sha256": "ffa0a103f31063d6809d3cb43f1a2f78de450554b2da67bb0eeee20fd8923633",
+      "rows": 38
+    },
+    "decima-systemone.jsonl": {
+      "sha256": "3e73a4bbed8dd07dc75c43b0a44cdd48f169fcd8c317268cbb1ee1e5866bdee9",
+      "rows": 11
+    }
+  }
+}

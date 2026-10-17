@@ -1,0 +1,19 @@
+{
+  "bands": [
+    {
+      "through": 64,
+      "settings": {
+        "attention_query_tile": 16,
+        "projection": {
+          "wasm-rows": 4
+        }
+      }
+    }
+  ],
+  "fallback": {
+    "attention_query_tile": 32,
+    "projection": {
+      "wasm-rows": 4
+    }
+  }
+}

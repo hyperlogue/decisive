@@ -1,0 +1,5 @@
+{
+  "source": "Native Beam FP16-storage/FP32-accumulation output from benches/webgpu_check.rs",
+  "purpose": "Browser/device smoke test; SDK and task-quality gates use the other reference corpora",
+  "request": "benches/platform-laya.jsonl"
+}

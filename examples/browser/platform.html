@@ -1,0 +1,138 @@
+<!doctype html><meta charset="utf-8"><title>Decisive browser backend contract and timing</title>
+<pre id="status">Starting…</pre>
+<script type="module">
+const options=new URLSearchParams(location.search);
+const backend=options.get('backend')||'wasm';
+const name=options.get('model')||'decima';
+const precision=options.get('precision')||(name==='decima'?'f32':'f16-storage');
+const quantized=precision.startsWith('int8');
+const bound=quantized?0.02:1e-4;
+const audit=options.get('audit')==='quantization';
+const packagePath=options.get('package')||'/artifacts/web/pkg';
+const status=s=>{window.progress=s;document.querySelector('#status').textContent=s};
+const jsonl=async path=>{
+ const response=await fetch(path);
+ if(!response.ok)throw Error(`Fixture request failed (${response.status}): ${path}`);
+ const text=(await response.text()).trim();
+ if(!text)throw Error(`Empty fixture file: ${path}`);
+ return text.split('\n').map(JSON.parse);
+};
+function compare(a,b,path='') {
+ if(typeof a==='number'&&typeof b==='number') {
+  if(!Number.isFinite(b)||(!audit&&Math.abs(a-b)>bound+1e-12))throw Error(`Output drift at ${path}: ${a} -> ${b}`);
+  if(!audit&&(path.endsWith('.noul')||path.endsWith('.act_probability'))&&(a>=0.5)!==(b>=0.5))throw Error('Binary decision changed at '+path);
+  return Math.abs(a-b);
+ }
+ if(a&&b&&typeof a==='object'&&typeof b==='object') {
+  if(path.endsWith('.probabilities')) {
+   const best=o=>Object.keys(o).reduce((k,j)=>o[j]>o[k]?j:k);
+   if(!audit&&best(a)!==best(b))throw Error('Probability argmax changed at '+path);
+  }
+  if(JSON.stringify(Object.keys(a).sort())!==JSON.stringify(Object.keys(b).sort()))throw Error('Output keys differ at '+path);
+  return Math.max(0,...Object.keys(a).map(k=>compare(a[k],b[k],path+'.'+k)));
+ }
+ if(a!==b)throw Error(`Decision/contract changed at ${path}: ${a} -> ${b}`);
+ return 0;
+}
+try {
+ if(audit&&!(name==='decima'&&quantized&&options.get('suite')==='raw'))throw Error('Quantization audit requires raw Decima quantized fixtures');
+ if(!['wasm','webgpu'].includes(backend))throw Error('backend must be wasm or webgpu');
+ if(!['decima','laya','laya-multilingual','laya-typed-decisions'].includes(name))throw Error('Unknown checkpoint variant');
+ const allowedPrecision=name==='decima'?['f32','int8','int8-weights','int8-full','int8-compact']:['f32','f16-storage','int8','int8-weights'];
+ if(!allowedPrecision.includes(precision))throw Error('Unsupported precision for this checkpoint');
+ if(backend==='webgpu'&&quantized)throw Error('WebGPU quantized execution is not implemented');
+ const rounds=Number(options.get('rounds')??1),warmup=Number(options.get('warmup')??0);
+ if(!Number.isSafeInteger(rounds)||rounds<1||!Number.isSafeInteger(warmup)||warmup<0)throw Error('rounds must be positive and warmup nonnegative integers');
+ const initialWarmup=Number(options.get('initial_warmup')??0);
+ if(!Number.isSafeInteger(initialWarmup)||initialWarmup<0)throw Error('initial_warmup must be a nonnegative integer');
+ if(!packagePath.startsWith('/artifacts/web/'))throw Error('package must be a local browser build');
+ let moduleName, wasmResponse;
+ for(moduleName of ['decisive','disco','beam']){
+  wasmResponse=await fetch(packagePath+'/'+moduleName+'_bg.wasm',{cache:'no-store'});
+  if(wasmResponse.status!==404)break;
+ }
+ if(!wasmResponse.ok)throw Error('Wasm download failed: '+wasmResponse.status);
+ const wasmBytes=await wasmResponse.arrayBuffer();
+ const api=await import(packagePath+'/'+moduleName+'.js?build='+Date.now());
+ const wasmSha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',wasmBytes)),b=>b.toString(16).padStart(2,'0')).join('');
+ window.build={backend,model:name,precision,package:packagePath,module:moduleName,wasm_sha256:wasmSha256,parameters:location.search,browser:navigator.userAgent};
+ const initStart=performance.now();
+ const wasm=await api.default({module_or_path:wasmBytes});
+ const wasmInitMs=performance.now()-initStart;
+ let model,fixtures,downloadMs,loadMs;
+ const downloadStart=performance.now();
+ if(name==='decima') {
+  const checkpoint=options.get('checkpoint')||'/models/decima-small/pytorch';
+  if(!checkpoint.startsWith('/models/')||checkpoint.includes('..'))throw Error('checkpoint must be a local model directory');
+  const bytes=[];
+  for(const file of ['decima.json','encoder/config.json','encoder/tokenizer.json','encoder/model.safetensors','head.safetensors']) {
+   status('Downloading '+file);const r=await fetch(checkpoint+'/'+file);if(!r.ok)throw Error('Missing checkpoint: '+file);bytes.push(new Uint8Array(await r.arrayBuffer()));
+  }
+  downloadMs=performance.now()-downloadStart;
+  status('Loading Decima '+backend);const loadStart=performance.now();
+  model=backend==='webgpu'?await api.DecimaWebGpuModel.create(...bytes):new api.DecimaModel(...bytes,precision);
+  loadMs=performance.now()-loadStart;
+  bytes.length=0;
+  fixtures=await jsonl(options.get('input')||(options.get('suite')==='raw'?'/benches/decima-reference.jsonl':'/benches/decima-systemone.jsonl'));
+ } else {
+  const variant=name==='laya'?'laya':name;
+  const bytes=[];
+  for(const file of ['encoder/config.json','rl_agent_config.json','tokenizer/tokenizer.json','tokenizer/tokenizer_config.json','model.safetensors']) {
+   status('Downloading '+file);const r=await fetch('/models/'+variant+'/'+file);if(!r.ok)throw Error('Missing checkpoint: '+file);bytes.push(new Uint8Array(await r.arrayBuffer()));
+  }
+  downloadMs=performance.now()-downloadStart;
+  status('Loading '+name+' '+backend);const loadStart=performance.now();
+  model=backend==='webgpu'?await api.LayaWebGpuModel.create(...bytes,precision!=='f32'):new api.BrowserModel(...bytes,precision!=='f32');
+  loadMs=performance.now()-loadStart;
+  bytes.length=0;
+  if(precision.startsWith('int8')) { if(backend==='webgpu')throw Error('GPU INT8 unavailable'); const quantStart=performance.now();model.quantize_encoder(precision==='int8',32);loadMs+=performance.now()-quantStart; }
+  // Preserve numeric JSON types in structured states. Parsing and stringifying
+  // through JavaScript turns 532.0 into 532, changing the model's input text.
+  const input=(await(await fetch(options.get('input')||'/benches/contracts.jsonl')).text()).trim().split('\n');
+  const expected=await jsonl(options.get('expected')||'/tests/fixtures/outputs/contracts.jsonl');
+  fixtures=input.map((request_json,i)=>({request_json,expected:expected[i]}));
+ }
+ const wasmMemoryAfterLoad=wasm.memory.buffer.byteLength;
+ if(options.has('rules'))model.setLengthRules(options.get('rules'));
+ const indices=options.get('indices')==='all'?fixtures.map((_,i)=>i):options.has('indices')?options.get('indices').split(',').map(Number):[0];
+ const records=[];let changedDecisions=0;
+ for(const [position,index] of indices.entries()) {
+  const fixture=fixtures[index];if(!fixture)throw Error('Missing fixture '+index);
+  const request=fixture.request_json??JSON.stringify(fixture.request);const times=[],warmTimes=[];let output,maxError=0,changedDecision=false;
+  const warmRounds=position===0?Math.max(warmup,initialWarmup):warmup;
+  for(let round=-warmRounds;round<rounds;round++) {
+   if(options.get('cache')==='off')model.clearCache?.();
+   status(`${name} ${backend}: fixture ${index}, ${round<0?'warmup':'round'} ${round}`);
+   if(options.has('profile')&&round>=0&&!window.profileStarted) {window.profileReady=true;while(!window.profileStarted)await new Promise(r=>setTimeout(r,50));}
+   const t=performance.now();output=JSON.parse(options.get('suite')==='raw'?await model.decide(fixture.state,JSON.stringify(fixture.question)):await model.predict(request));const ms=performance.now()-t;
+   window.lastPrediction={fixture:index,reference:fixture.expected,output};
+   maxError=Math.max(maxError,compare(fixture.expected,output));
+   if(options.get('suite')==='raw') {
+    const argmax=a=>a.reduce((best,v,i)=>v>a[best]?i:best,0);
+    changedDecision=argmax(fixture.expected)!==argmax(output);
+    if(!audit&&changedDecision)throw Error(`Raw decision changed at fixture ${index}: ${JSON.stringify(fixture.expected)} -> ${JSON.stringify(output)}`);
+   }
+   if(round>=0)times.push(ms);else warmTimes.push(ms);
+   await new Promise(r=>setTimeout(r,0));
+  }
+  changedDecisions+=Number(changedDecision);
+  records.push({changed_decision:changedDecision,fixture:index,output,reference:fixture.expected,gold:fixture.gold??null,max_error:maxError,warmup_latencies_ms:warmTimes,latencies_ms:times});
+ }
+ let gold=null;
+ if(options.get('suite')==='raw') {
+  const labeled=records.filter(r=>Number.isInteger(r.gold));
+  const metrics=field=>{
+   let correct=0,brier=0,nll=0;
+   for(const r of labeled) { const p=r[field];const chosen=p.reduce((best,v,i)=>v>p[best]?i:best,0);correct+=chosen===r.gold; brier+=p.reduce((sum,v,i)=>sum+(v-(i===r.gold?1:0))**2,0);nll-=Math.log(Math.max(p[r.gold],1e-12)); }
+   return {labeled:labeled.length,correct,brier:brier/Math.max(labeled.length,1),nll:nll/Math.max(labeled.length,1)};
+  };
+  gold={reference:metrics('reference'),candidate:metrics('output')};
+  if(!audit&&gold.candidate.correct<gold.reference.correct)throw Error('Gold accuracy regressed');
+ }
+ const adapter=backend==='webgpu'?JSON.parse(model.adapterInfo()):null;
+ const wasmMemoryAfterInference=wasm.memory.buffer.byteLength;
+ if(options.has('profile')) {window.profileDone=true;while(!window.profileStopped)await new Promise(r=>setTimeout(r,25));}
+ model.free();
+ window.result={...window.build,audit,changed_decisions:changedDecisions,gates:{probability:records.every(r=>r.max_error<=bound),same_decisions:changedDecisions===0,gold_accuracy:gold?gold.candidate.correct>=gold.reference.correct:null},backend,model:name,precision,maximum_allowed_error:bound,wasm_init_ms:wasmInitMs,download_ms:downloadMs,load_ms:loadMs,wasm_memory_after_load:wasmMemoryAfterLoad,wasm_memory_after_inference:wasmMemoryAfterInference,package:packagePath,wasm_sha256:wasmSha256,adapter,cache:options.get('cache')||'on',warmup,initial_warmup:initialWarmup,rounds,gold,records};status('Complete');
+} catch(error) {window.result={...window.build,error:String(error),progress:window.progress,last_prediction:window.lastPrediction};status(String(error));}
+</script>

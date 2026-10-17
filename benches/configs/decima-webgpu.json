@@ -1,0 +1,15 @@
+{
+  "bands": [
+    {
+      "through": 64,
+      "settings": {
+        "matrix_tile": 16,
+        "attention_query_tile": 16
+      }
+    }
+  ],
+  "fallback": {
+    "matrix_tile": 16,
+    "attention_query_tile": 32
+  }
+}

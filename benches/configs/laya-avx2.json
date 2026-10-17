@@ -1,0 +1,17 @@
+{
+  "bands": [
+    {
+      "through": 512,
+      "settings": {
+        "attention_query_tile": 64,
+        "projection": "packed-input"
+      }
+    }
+  ],
+  "fallback": {
+    "attention_query_tile": 64,
+    "projection": {
+      "long-rows": 24
+    }
+  }
+}

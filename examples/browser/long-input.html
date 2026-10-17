@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>Decisive full-length browser correctness check</title>
+<pre id="status">Loading the pinned English checkpoint…</pre>
+<script type="module">
+import init, { BrowserRuntime } from '/artifacts/web/pkg/decisive.js';
+const status = message => { document.querySelector('#status').textContent = message; window.progress = message; };
+try {
+  await init();
+  const lines = async path => (await (await fetch(path)).text()).trim().split('\n').map(JSON.parse);
+  const requests = await lines('/benches/long-inputs.jsonl');
+  const reference = await lines('/tests/fixtures/outputs/long-inputs.jsonl');
+  const runtime = new BrowserRuntime();
+  await runtime.load(location.origin + '/models/laya', true);
+  const records = [];
+  for (const index of [1, 2]) {
+    status('Checking full ' + requests[index].max_len + '-token prediction…');
+    records.push({ request: index, cache: 'off', output: JSON.parse(runtime.predict(JSON.stringify(requests[index]))), reference: reference[index] });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  runtime.unload();
+  window.result = { correctness_only: true, scope: 'Browser Wasm SIMD128 with FP16 weights and portable Rust kernels. Two uncached predictions at full1024/2048tokens. SDK output/usage checks are performed separately. No browser speed or full task-quality claim.', records };
+  status('Full-length browser predictions collected for SDK comparison.');
+} catch (error) { window.result = { error: String(error), progress: window.progress }; status(String(error)); }
+</script>

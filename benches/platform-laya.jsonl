@@ -1,0 +1,1 @@
+{"state": "The customer was charged twice.", "questions": {"q": {"type": "choice", "instructions": "Choose the correct department.", "criteria": ["billing", "technical support", "shipping"]}}}

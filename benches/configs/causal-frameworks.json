@@ -1,0 +1,199 @@
+{
+  "engines": [
+    {
+      "id": "decisive-kev",
+      "model": "kev",
+      "command": [
+        "target/benchmarks/causal_bench",
+        "serve",
+        "--model",
+        "kev",
+        "--threads",
+        "{threads}",
+        "--port",
+        "{port}"
+      ],
+      "reset": [
+        "/benchmark/reset"
+      ],
+      "precision": "FP32 projections and state; exact BF16 embedding lookup",
+      "notes": "Native AVX2. Benchmark server calls public model API, one inference lane; 128 MiB prefix cache. Returns raw probabilities in addition to SDK-rounded answers. Complete hybrid-state snapshots support exact prefix reuse and a budgeted nearby backup for end edits."
+    },
+    {
+      "id": "llama-kev",
+      "model": "kev",
+      "command": [
+        "{llama}/build/bin/llama-server",
+        "-m",
+        "models/kev-0.8b-f32.gguf",
+        "-ngl",
+        "0",
+        "-t",
+        "{threads}",
+        "-tb",
+        "{threads}",
+        "-c",
+        "8192",
+        "-b",
+        "2048",
+        "-ub",
+        "1024",
+        "-np",
+        "1",
+        "-ctk",
+        "f32",
+        "-ctv",
+        "f32",
+        "-fa",
+        "off",
+        "--poll",
+        "0",
+        "--poll-batch",
+        "0",
+        "--slots",
+        "--cache-ram",
+        "0",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "{port}",
+        "--slot-save-path",
+        "{output}/private-logs"
+      ],
+      "reset": [
+        "/slots/0?action=erase"
+      ],
+      "precision": "Official F32 conversion, F32 KV cache, GPU layers 0",
+      "notes": "Native /v1/systemone. OpenBLAS CPU build, pthread worker pool. Per-slot prompt state cleared before initial request, retained before followup; cache-ram 0 disables the separate idle-slot cache. Usage counts shared state for each question."
+    },
+    {
+      "id": "torch-kev",
+      "model": "kev",
+      "command": [
+        "{python}",
+        "scripts/causal_reference_server.py",
+        "--model",
+        "kev",
+        "--sources",
+        "{sources}",
+        "--threads",
+        "{threads}",
+        "--port",
+        "{port}"
+      ],
+      "reset": [
+        "/benchmark/reset"
+      ],
+      "precision": "torch.float32, merged LoRA, CPU",
+      "notes": "Official Kev DecisionModel.probs, default eager attention, Transformers fallback for DeltaNet/conv. One inference lane. Official probs_and_prefix/probs_with_prefix APIs, one retained state. Shares state within a multi-question request. Not the production Kev scheduler."
+    },
+    {
+      "id": "torch-kev-sdpa",
+      "model": "kev",
+      "command": [
+        "{python}",
+        "scripts/causal_reference_server.py",
+        "--model",
+        "kev",
+        "--sources",
+        "{sources}",
+        "--threads",
+        "{threads}",
+        "--port",
+        "{port}",
+        "--attention",
+        "sdpa"
+      ],
+      "reset": [
+        "/benchmark/reset"
+      ],
+      "precision": "torch.float32, merged LoRA, CPU",
+      "notes": "Official Kev CPU runtime with SDPA attention and the same exact-state prefix APIs. Separate from the default eager CPU baseline; every output must pass the same gate. This is a benchmark adapter, not the production Kev scheduler."
+    },
+    {
+      "id": "decisive-jev",
+      "model": "jev",
+      "command": [
+        "target/benchmarks/causal_bench",
+        "serve",
+        "--model",
+        "jev",
+        "--threads",
+        "{threads}",
+        "--port",
+        "{port}"
+      ],
+      "reset": [
+        "/benchmark/reset"
+      ],
+      "precision": "FP32 arithmetic/state; lossless BF16 storage for eligible projection weights and embedding lookup",
+      "notes": "Native AVX2. Public SystemOne model API, typed_official calibration, one inference lane, 128 MiB prefix cache. Complete hybrid-state snapshots support exact prefix reuse and a budgeted nearby backup for end edits."
+    },
+    {
+      "id": "llama-jev-f32",
+      "model": "jev",
+      "command": [
+        "{python}",
+        "scripts/causal_reference_server.py",
+        "--model",
+        "jev",
+        "--engine",
+        "llama",
+        "--sources",
+        "{sources}",
+        "--scorer",
+        "{sources}/jev-gguf-f32kv/build/jev-score",
+        "--threads",
+        "{threads}",
+        "--port",
+        "{port}",
+        "--gguf",
+        "models/jev-style-0.8b-v3-f32.gguf"
+      ],
+      "reset": [
+        "/benchmark/reset"
+      ],
+      "precision": "Exact pinned HF checkpoint converted with official F32 converter; FP32 KV; CPU only",
+      "notes": "Official Jev scorer plus explicit F32 K/V context settings (scripts/jev_score_f32_kv.patch). Upstream libllama unmodified. Flash attention off, n_ubatch 1024, exact many-mode. Single-question fused path does not retain prefix. Both projection weights and KV use FP32. The GGUF is converted from the same pinned checkpoint used by Decisive/PyTorch; strict output gate required."
+    },
+    {
+      "id": "torch-jev",
+      "model": "jev",
+      "command": [
+        "{python}",
+        "scripts/causal_reference_server.py",
+        "--model",
+        "jev",
+        "--sources",
+        "{sources}",
+        "--threads",
+        "{threads}",
+        "--port",
+        "{port}"
+      ],
+      "reset": [
+        "/benchmark/reset"
+      ],
+      "precision": "torch.float32, CPU",
+      "notes": "Official Jev runtime with its CPU chunked SDPA path and selected yes/no readout; typed_official calibration. No cross-request cache in the upstream runtime. One inference lane."
+    }
+  ],
+  "assets": [
+    "target/release/decisive",
+    "scripts/causal_reference_server.py",
+    "models/kev-0.8b-f32.gguf",
+    "models/jev-style-0.8b-v3-gguf/Jev-Style-0.8B-Decision-v3-F16.gguf",
+    "models/kev-0.8b/beam-revision.json",
+    "models/qwen3.5-0.8b-base/beam-revision.json",
+    "models/jev-style-0.8b-v3/beam-revision.json",
+    "models/kev-0.8b/adapter_model.safetensors",
+    "models/kev-0.8b/head.pt",
+    "models/kev-0.8b/tokenizer.json",
+    "models/qwen3.5-0.8b-base/model.safetensors-00001-of-00001.safetensors",
+    "models/jev-style-0.8b-v3/model.safetensors",
+    "models/jev-style-0.8b-v3/tokenizer.json",
+    "models/jev-style-0.8b-v3/readout_config.json",
+    "scripts/jev_score_f32_kv.patch",
+    "models/jev-style-0.8b-v3-f32.gguf"
+  ]
+}

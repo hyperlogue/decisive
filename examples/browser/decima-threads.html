@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8"><title>Decisive Decima browser worker benchmark</title>
+<pre id="status">Starting worker…</pre><script type="module">
+const worker=new Worker('./decima-threads.js'+location.search,{type:'module'});
+const flags=new Set();
+const poll=new URLSearchParams(location.search).has('profile')?setInterval(()=>{
+ for(const flag of ['profileStarted','profileStopped'])if(window[flag]&&!flags.has(flag)){flags.add(flag);worker.postMessage({flag});}
+},10):null;
+worker.onmessage=({data})=>{
+ if(data.progress){window.progress=data.progress;document.querySelector('#status').textContent=data.progress;}
+ if(data.profileReady)window.profileReady=true;
+ if(data.profileDone)window.profileDone=true;
+ if(data.result){window.result=data.result;clearInterval(poll);worker.terminate();}
+};
+worker.onerror=e=>{window.result={error:e.message};clearInterval(poll);worker.terminate();};
+</script>

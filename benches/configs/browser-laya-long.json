@@ -1,0 +1,15 @@
+{
+  "repetitions": 3,
+  "warmup": 1,
+  "rounds": 3,
+  "cases": [
+    {
+      "name": "reference",
+      "page": "/examples/browser/platform.html?backend=wasm&model=laya&package=%2Fartifacts%2Fweb%2Fpkg-reference&input=%2Fbenches%2Flong-inputs.jsonl&expected=%2Ftests%2Ffixtures%2Foutputs%2Flong-inputs.jsonl&indices=0%2C1%2C2&cache=off&precision=f16-storage"
+    },
+    {
+      "name": "candidate",
+      "page": "/examples/browser/platform.html?backend=wasm&model=laya&package=%2Fartifacts%2Fweb%2Fpkg-candidate&input=%2Fbenches%2Flong-inputs.jsonl&expected=%2Ftests%2Ffixtures%2Foutputs%2Flong-inputs.jsonl&indices=0%2C1%2C2&cache=off&precision=f16-storage"
+    }
+  ]
+}

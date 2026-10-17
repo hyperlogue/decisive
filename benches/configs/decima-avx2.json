@@ -1,0 +1,7 @@
+{
+  "bands": [],
+  "fallback": {
+    "projection_rows": 6,
+    "attention_scores": 16384
+  }
+}
