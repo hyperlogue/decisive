@@ -23,6 +23,7 @@ self.onmessage=async({data})=>{
   };
   try{
     if(!Array.isArray(data.modes)||data.modes.length<1||data.modes.length>2||new Set(data.modes).size!==data.modes.length||!Array.isArray(data.fixtures)||!data.fixtures.length||!Number.isInteger(data.rounds)||data.rounds<1||data.rounds>7||!Number.isInteger(data.warmups)||data.warmups<0||data.warmups>2)throw Error('Invalid checkpoint phase');
+    if(data.modes.some(m=>m.endsWith('-all'))&&(!data.corpus||data.warmups!==0||data.rounds!==1||data.profile))throw Error('Auxiliary quantization is restricted to quality evaluation');
     const metadata=await(await fetch('/metadata')).json();report.metadata=metadata;
     let corpus;
     if(data.corpus){
@@ -64,7 +65,7 @@ self.onmessage=async({data})=>{
           const result=await engine.predict(request,fixture==='long'?1024:2048,true);
           if(resident&&(result.request_ms!==result.elapsed_ms||result.decoder_weight_bytes_read!==0||result.layers.some(l=>l.pack_ms!==0||l.read_ms!==0)))throw Error('One-time decoder preparation leaked into warm request');
           if(result.layers.length!==32*result.response.usage.sequences)throw Error('Incomplete decoder request');
-          if(['int8','int8-tuned','w8a8-f32','q4-fused','q4-buffered'].includes(mode.replace(/-reuse$/,''))&&result.layers.some(l=>l.profile?.dispatches.some(d=>['gemm','mlp_fused','gemm_small','mlp_small'].includes(d.kernel))))throw Error('All-INT8 projection configuration dispatched FP16');
+          if(['int8','int8-tuned','w8a8-f32','q4-fused','q4-buffered','int8-all','q4-all'].includes(mode.replace(/-reuse$/,''))&&result.layers.some(l=>l.profile?.dispatches.some(d=>['gemm','mlp_fused','gemm_small','mlp_small'].includes(d.kernel))))throw Error('All-INT8 projection configuration dispatched FP16');
           const run={mode,fixture,round,warmup:round<0,started_epoch_ms,finished_epoch_ms:performance.timeOrigin+performance.now(),...result,wasm_memory_bytes:wasm.memory.buffer.byteLength};
           if(!corpus&&mode.replace(/-reuse$/,'')==='bf16'&&fixture!=='long'){
             const expected=reference.cases.find(c=>JSON.stringify(c.request)===JSON.stringify(request));

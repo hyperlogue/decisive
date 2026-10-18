@@ -13,7 +13,7 @@ mod wasm_simd;
 #[cfg(feature = "wasm")]
 mod web;
 #[cfg(all(feature = "wasm", feature = "webgpu"))]
-mod web_gpu;
+mod browser_gpu;
 #[cfg(all(feature = "wasm", feature = "webgpu"))]
 mod webgpu;
 use anyhow::{Result, ensure};

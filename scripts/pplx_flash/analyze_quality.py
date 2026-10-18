@@ -81,19 +81,27 @@ def paired(rows,candidate,reference='fp16-scan',bootstrap=False):
     return result
 
 
-def analyze(corpus_path,paths,partial=False):
+def analyze(corpus_path,paths,partial=False,modes=None):
+    modes = MODES if modes is None else modes
+    assert len(modes)==3 and len(set(modes))==3 and modes[0]=='fp16-scan'
+    fp16,q8,q4=modes
     raw=corpus_path.read_bytes();corpus=json.loads(raw);digest=hashlib.sha256(raw).hexdigest()
-    cases={c['id']:c for c in corpus['cases']};runs={m:{} for m in MODES};builds=set();revisions=set()
+    cases={c['id']:c for c in corpus['cases']};runs={m:{} for m in modes};builds=set();revisions=set()
     for path in paths:
         report=json.loads(path.read_text());assert report['completed'] and report['purpose']=='quality-evaluation'
         assert report['corpus_sha256']==report['metadata']['corpus_sha256']==digest
         builds.add(report['wasm_sha256']);revisions.add(report['metadata']['revision'])
         for run in report['runs']:
-            mode=run['mode'];id=run['fixture'];assert id in cases and mode in MODES and id not in runs[mode]
+            mode=run['mode'];id=run['fixture'];assert id in cases and mode in modes and id not in runs[mode]
             assert not run['warmup'] and run['round']==0
             assert len(run['layers'])==32*run['response']['usage']['sequences']
             assert run['timing_scope']=='warm-request' and run['decoder_weight_bytes_read']==0
             assert all(l['pack_ms']==0 and l['read_ms']==0 for l in run['layers'])
+            if mode in ['int8-all','q4-all']:
+                auxiliary=run['adapter']['auxiliary_quantization']
+                assert auxiliary['weight_bits']==(8 if mode=='int8-all' else 4)
+                assert auxiliary['tensors']==['language_model.embed_tokens.weight','readout.weight']
+                assert auxiliary['performance_eligible'] is False
             assert set(run['response']['answers'])==set(cases[id]['request']['questions'])
             assert all(math.isfinite(x) for c in run['diagnostics']['logits'] for row in c['values'] for x in row)
             for key,answer in run['response']['answers'].items():
@@ -101,23 +109,23 @@ def analyze(corpus_path,paths,partial=False):
                 prediction(answer)
             runs[mode][id]=run
     assert len(builds)==len(revisions)==1
-    matched=set.intersection(*(set(runs[m]) for m in MODES))
-    if not partial:assert all(set(runs[m])==set(cases) for m in MODES),'Missing model/case outputs'
+    matched=set.intersection(*(set(runs[m]) for m in modes))
+    if not partial:assert all(set(runs[m])==set(cases) for m in modes),'Missing model/case outputs'
     rows=[];details=[]
     for id in [c['id'] for c in corpus['cases'] if c['id'] in matched]:
         case=cases[id]
-        counts=[runs[m][id]['response']['usage'] for m in MODES];assert all(c==counts[0] for c in counts)
+        counts=[runs[m][id]['response']['usage'] for m in modes];assert all(c==counts[0] for c in counts)
         for question in case['request']['questions']:
             gold=case['expected'].get(question,{})
-            answers={m:runs[m][id]['response']['answers'][question] for m in MODES}
-            assert all(set(distribution(a))==set(distribution(answers[MODES[0]])) for a in answers.values())
+            answers={m:runs[m][id]['response']['answers'][question] for m in modes}
+            assert all(set(distribution(a))==set(distribution(answers[modes[0]])) for a in answers.values())
             row={'id':id,'family':case['family'],'question':question,'gold':gold.get('label'),'ordinal':gold.get('ordinal'),
                  'primary':question==primary(case),'answers':answers}
             rows.append(row)
             preds={m:prediction(a) for m,a in answers.items()}
             probs={m:distribution(a) for m,a in answers.items()}
-            tv=.5*sum(abs(probs['q4-fused'][k]-v) for k,v in probs['fp16-scan'].items())
-            score_delta=answers['q4-fused']['score']-answers['fp16-scan']['score'] if answers['fp16-scan']['type']=='score' else None
+            tv=.5*sum(abs(probs[q4][k]-v) for k,v in probs[fp16].items())
+            score_delta=answers[q4]['score']-answers[fp16]['score'] if answers[fp16]['type']=='score' else None
             details.append({**{k:v for k,v in row.items() if k!='answers'},'predictions':preds,'probabilities':probs,
                 'numeric':{m:a.get('score',a.get('noul')) for m,a in answers.items()},
                 'q4_total_variation_vs_fp16':tv,'q4_score_delta_vs_fp16':score_delta,
@@ -128,10 +136,11 @@ def analyze(corpus_path,paths,partial=False):
     for base in sorted({id.rsplit('-',1)[0] for id in tone_rows}):
         ids=[base+'-'+str(i) for i in range(3)]
         if not all(id in tone_rows for id in ids):continue
-        values={m:[tone_rows[id]['answers'][m]['score'] for id in ids] for m in MODES}
+        values={m:[tone_rows[id]['answers'][m]['score'] for id in ids] for m in modes}
         tone_triplets.append({'topic':base,'scores_calm_concerned_angry':values,'strict_order':{m:v[0]<v[1]<v[2] for m,v in values.items()}})
     groups={group:[r for r in rows if r['family']+'/'+r['question']==group] for group in sorted({r['family']+'/'+r['question'] for r in rows})}
     summary={'complete':not partial,'expected_inputs':len(cases),'matched_inputs':len(matched),'coverage':{m:len(r) for m,r in runs.items()},
+        'modes':modes,'quantization':{m:next(iter(runs[m].values()))['adapter'].get('auxiliary_quantization') for m in modes},
         'corpus_sha256':digest,'wasm_sha256':next(iter(builds)),'checkpoint_revision':next(iter(revisions)),'seed':corpus['seed'],'dataset_sources':corpus['sources'],
         'methodology':{'public_examples':128,'authored_or_regression_examples':32,'labeled_decisions':sum(r['gold'] is not None for r in rows),
             'primary':'One predeclared primary question per input; auxiliary judgments reported separately.',
@@ -139,12 +148,12 @@ def analyze(corpus_path,paths,partial=False):
             'binary':'noul is classified true at probability >=0.5.',
             'uncertainty':'Paired 4000-resample bootstrap over inputs, 95% percentile interval. Task subsets are small; authored labels are not independent human annotations.',
             'scope':'Frozen subset evaluation, not a full public benchmark or representative production accuracy. No latency claims from these non-warmed quality runs.'},
-        'primary_metrics':{m:metric(primary_rows,m) for m in MODES},
-        'primary_comparisons':[paired(primary_rows,m,bootstrap=True) for m in MODES[1:]],
-        'q4_vs_q8_primary':paired(primary_rows,'q4-fused','int8-tuned',bootstrap=True),
+        'primary_metrics':{m:metric(primary_rows,m) for m in modes},
+        'primary_comparisons':[paired(primary_rows,m,bootstrap=True) for m in modes[1:]],
+        'q4_vs_q8_primary':paired(primary_rows,q4,q8,bootstrap=True),
         'controlled_tone_triplets':tone_triplets,
-        'groups':{g:{'metrics':{m:metric(rs,m) for m in MODES},'comparisons':[paired(rs,m) for m in MODES[1:]]} for g,rs in groups.items()},
-        'all_question_drift':[paired(rows,m) for m in MODES[1:]],
+        'groups':{g:{'metrics':{m:metric(rs,m) for m in modes},'comparisons':[paired(rs,m) for m in modes[1:]]} for g,rs in groups.items()},
+        'all_question_drift':[paired(rows,m) for m in modes[1:]],
         'largest_q4_distribution_changes':sorted(details,key=lambda d:d['q4_total_variation_vs_fp16'],reverse=True)[:20],
         'largest_q4_score_changes':sorted([d for d in details if d['q4_score_delta_vs_fp16'] is not None],key=lambda d:abs(d['q4_score_delta_vs_fp16']),reverse=True)[:20],
         'details':details}
@@ -154,7 +163,8 @@ def analyze(corpus_path,paths,partial=False):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--corpus',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True);parser.add_argument('--partial',action='store_true')
+    parser.add_argument('--modes',nargs=3,default=MODES)
     parser.add_argument('reports',nargs='+',type=Path);args=parser.parse_args()
-    result=analyze(args.corpus,args.reports,args.partial)
+    result=analyze(args.corpus,args.reports,args.partial,args.modes)
     with args.output.open('x') as stream:json.dump(result,stream,ensure_ascii=False,indent=2);stream.write('\n')
     print(json.dumps({k:result[k] for k in ['complete','matched_inputs','coverage','primary_metrics','primary_comparisons']}))

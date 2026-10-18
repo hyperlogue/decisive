@@ -28,6 +28,8 @@ pub struct BrowserGpu {
     raw_logits: Vec<Value>,
     #[cfg(feature = "kernel-checks")]
     resident_layers: Vec<HashMap<String, webgpu::Tensor>>,
+    #[cfg(feature = "kernel-checks")]
+    auxiliary_bits: u32,
 }
 #[wasm_bindgen(js_class=PplxFlashWebGpu)]
 impl BrowserGpu {
@@ -61,7 +63,12 @@ impl BrowserGpu {
         mode: &str,
         profile: bool,
     ) -> Result<BrowserGpu, JsValue> {
-        let gpu = webgpu::Gpu::checkpoint(mode, profile)
+        let (decoder_mode, auxiliary_bits) = match mode {
+            "int8-all" => ("int8-tuned", 8),
+            "q4-all" => ("q4-fused", 4),
+            _ => (mode, 0),
+        };
+        let gpu = webgpu::Gpu::checkpoint(decoder_mode, profile)
             .await
             .map_err(error)?;
         let mut model = Self::from_parts(
@@ -74,6 +81,10 @@ impl BrowserGpu {
             headers_json,
         )?;
         model.benchmark = true;
+        model.auxiliary_bits = auxiliary_bits;
+        if auxiliary_bits != 0 {
+            reconstruct_rows(&mut model.engine.readout, D, auxiliary_bits).map_err(error)?;
+        }
         Ok(model)
     }
     #[cfg(feature = "kernel-checks")]
@@ -135,6 +146,10 @@ impl BrowserGpu {
                 .chunks_exact(2)
                 .map(|b| f32::from_bits((u16::from_le_bytes([b[0], b[1]]) as u32) << 16)),
         );
+        #[cfg(feature = "kernel-checks")]
+        if self.auxiliary_bits != 0 {
+            reconstruct_rows(&mut self.work.hidden, D, self.auxiliary_bits).map_err(error)?;
+        }
         self.gpu.begin(&self.work.hidden).map_err(error)?;
         self.work.hidden.clear();
         self.started = true;
@@ -200,6 +215,17 @@ impl BrowserGpu {
             info["resident_decoder_weight_bytes"] = json!(self.resident_layers.iter()
                 .flat_map(|layer| layer.values()).map(|t| t.buffer.size()).sum::<u64>());
             info["quantization"] = self.gpu.q4_info();
+        }
+        #[cfg(feature = "kernel-checks")]
+        {
+            info["auxiliary_quantization"] = json!({
+                "weight_bits": self.auxiliary_bits,
+                "tensors": if self.auxiliary_bits == 0 { Vec::<&str>::new() } else { vec!["language_model.embed_tokens.weight", "readout.weight"] },
+                "scheme": "symmetric-per-row-absmax-round-even-fp32-scale",
+                "execution": "quality-only-quantize-dequantize-to-fp32",
+                "floating_point_exceptions": ["normalization", "convolution", "recurrent parameters"],
+                "performance_eligible": self.auxiliary_bits == 0
+            });
         }
         info.to_string()
     }
@@ -344,6 +370,34 @@ impl BrowserGpu {
             raw_logits: Vec::new(),
             #[cfg(feature = "kernel-checks")]
             resident_layers: Vec::new(),
+            #[cfg(feature = "kernel-checks")]
+            auxiliary_bits: 0,
         })
     }
+}
+
+#[cfg(feature = "kernel-checks")]
+fn reconstruct_rows(values: &mut [f32], columns: usize, bits: u32) -> Result<()> {
+    ensure!([4, 8].contains(&bits) && columns > 0 && values.len() % columns == 0, "invalid row quantization shape or precision");
+    ensure!(values.iter().all(|v| v.is_finite()), "nonfinite row quantization input");
+    let limit = ((1u32 << (bits - 1)) - 1) as f32;
+    for row in values.chunks_exact_mut(columns) {
+        let maximum = row.iter().map(|v| v.abs()).fold(0f32, f32::max);
+        if maximum == 0. { row.fill(0.); continue; }
+        let scale = maximum / limit;
+        ensure!(scale.is_normal(), "row quantization scale underflow");
+        for value in row {
+            let code = (*value / scale).round_ties_even().clamp(-limit, limit) as i32;
+            *value = code as f32 * scale;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "kernel-checks")]
+#[wasm_bindgen(js_name=pplxFlashQuantizeRows)]
+pub fn quantize_rows(values: &[f32], columns: usize, bits: u32) -> Result<Vec<f32>, JsValue> {
+    let mut output = values.to_vec();
+    reconstruct_rows(&mut output, columns, bits).map_err(error)?;
+    Ok(output)
 }

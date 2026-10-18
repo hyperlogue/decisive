@@ -1,6 +1,11 @@
 import math
+import copy
+import hashlib
+import json
+from types import SimpleNamespace
 import unittest
-from analyze_quality import MODES, distribution, metric, paired, prediction
+from analyze_quality import MODES, analyze, distribution, metric, paired, prediction
+from render_quality import render
 
 
 def score(p):return {'type':'score','probabilities':{str(i):v for i,v in enumerate(p)},'score':sum(i*v for i,v in enumerate(p))}
@@ -65,6 +70,30 @@ class QualityMetrics(unittest.TestCase):
 
     def test_bootstrap_does_not_treat_auxiliary_questions_as_independent(self):
         with self.assertRaises(AssertionError):paired([row(),row()],'q4-fused',bootstrap=True)
+
+    def test_all_matrix_modes_require_matching_quantization_metadata(self):
+        modes=['fp16-scan','int8-all','q4-all']
+        corpus={'seed':1,'sources':{},'cases':[{'id':'tone-test-1','family':'controlled-tone','source':{},
+            'request':{'state':'Example input','questions':{'tone':{'type':'score'}}},'expected':{'tone':{'label':'1','ordinal':1}}}]}
+        raw=json.dumps(corpus).encode();digest=hashlib.sha256(raw).hexdigest()
+        corpus_path=SimpleNamespace(read_bytes=lambda:raw)
+        report={'completed':True,'purpose':'quality-evaluation','corpus_sha256':digest,'wasm_sha256':'build',
+            'metadata':{'corpus_sha256':digest,'revision':'checkpoint'},'runs':[]}
+        for mode,bits in zip(modes,[0,8,4]):
+            report['runs'].append({'mode':mode,'fixture':'tone-test-1','warmup':False,'round':0,
+                'layers':[{'pack_ms':0,'read_ms':0} for _ in range(32)],'timing_scope':'warm-request',
+                'decoder_weight_bytes_read':0,'response':{'usage':{'sequences':1,'input_tokens':10},
+                'answers':{'tone':score([.1,.8,.1])}},'diagnostics':{'logits':[{'values':[[0.,1.,0.]]}]},
+                'adapter':{'auxiliary_quantization':{'weight_bits':bits,'performance_eligible':False,
+                    'tensors':['language_model.embed_tokens.weight','readout.weight']}}})
+        path=SimpleNamespace(read_text=lambda:json.dumps(report))
+        result=analyze(corpus_path,[path],modes=modes)
+        self.assertEqual(result['modes'],modes)
+        self.assertEqual(result['primary_metrics']['int8-all']['correct'],1)
+        self.assertIn('Q8 all matrices',render(result,corpus))
+        bad=copy.deepcopy(report);bad['runs'][1]['adapter']['auxiliary_quantization']['weight_bits']=0
+        with self.assertRaises(AssertionError):
+            analyze(corpus_path,[SimpleNamespace(read_text=lambda:json.dumps(bad))],modes=modes)
 
 
 if __name__=='__main__':unittest.main()
