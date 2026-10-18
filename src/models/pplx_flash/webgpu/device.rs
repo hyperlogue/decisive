@@ -8,6 +8,26 @@ struct PendingDispatch {
     groups: [u32; 3],
 }
 
+// Own only this submission's uniforms. Later submissions must never be freed
+// by an earlier completion callback.
+pub(super) struct Completion {
+    receive: futures_channel::oneshot::Receiver<()>,
+    uniforms: Vec<wgpu::Buffer>,
+    #[cfg(not(target_arch = "wasm32"))]
+    device: wgpu::Device,
+}
+impl Completion {
+    pub async fn wait(self) -> Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
+        let result = self.receive.await.context("GPU completion cancelled");
+        for uniform in self.uniforms {
+            uniform.destroy();
+        }
+        result
+    }
+}
+
 pub(super) struct Device {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -100,6 +120,38 @@ impl Device {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Pplx Flash request"),
             })
+    }
+    pub fn discard_pending(&self) {
+        self.pending.borrow_mut().clear();
+        for uniform in self.uniforms.borrow_mut().drain(..) {
+            uniform.destroy();
+        }
+    }
+    pub fn submit_commands(&self, mut encoder: wgpu::CommandEncoder) {
+        self.flush(&mut encoder);
+        self.queue.submit([encoder.finish()]);
+    }
+    pub fn submit_deferred(&self, encoder: wgpu::CommandEncoder) -> Completion {
+        self.submit_commands(encoder);
+        self.completion()
+    }
+    pub fn idle_completion(&self) -> Completion {
+        self.pending.borrow_mut().clear();
+        self.queue.submit([]);
+        self.completion()
+    }
+    fn completion(&self) -> Completion {
+        let uniforms = self.uniforms.take();
+        let (send, receive) = futures_channel::oneshot::channel();
+        self.queue.on_submitted_work_done(move || {
+            let _ = send.send(());
+        });
+        Completion {
+            receive,
+            uniforms,
+            #[cfg(not(target_arch = "wasm32"))]
+            device: self.device.clone(),
+        }
     }
     pub fn dispatch(
         &self,
@@ -202,9 +254,38 @@ impl Device {
     }
     pub async fn read_words(
         &self,
+        encoder: wgpu::CommandEncoder,
+        source: &wgpu::Buffer,
+        elements: usize,
+    ) -> Result<Vec<u32>> {
+        self.read_words_submitted(encoder, source, elements, || {})
+            .await
+    }
+    pub async fn read_submitted(
+        &self,
+        encoder: wgpu::CommandEncoder,
+        source: &wgpu::Buffer,
+        elements: usize,
+        submitted: impl FnOnce(),
+    ) -> Result<Vec<f32>> {
+        let values: Vec<_> = self
+            .read_words_submitted(encoder, source, elements, submitted)
+            .await?
+            .into_iter()
+            .map(f32::from_bits)
+            .collect();
+        ensure!(
+            values.iter().all(|v| v.is_finite()),
+            "non-finite GPU result"
+        );
+        Ok(values)
+    }
+    async fn read_words_submitted(
+        &self,
         mut encoder: wgpu::CommandEncoder,
         source: &wgpu::Buffer,
         elements: usize,
+        submitted: impl FnOnce(),
     ) -> Result<Vec<u32>> {
         let bytes = elements.checked_mul(4).context("GPU read size overflow")? as u64;
         ensure!(
@@ -220,6 +301,7 @@ impl Device {
         self.flush(&mut encoder);
         encoder.copy_buffer_to_buffer(source, 0, &staging, 0, bytes);
         self.queue.submit([encoder.finish()]);
+        submitted();
         let (send, receive) = futures_channel::oneshot::channel();
         staging
             .slice(..)

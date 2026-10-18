@@ -170,13 +170,16 @@ function summarize(runs) {
   const percentile = p => latencies[Math.max(0, Math.ceil(p * latencies.length) - 1)];
   const sum = (rows, field) => rows.reduce((n, r) => n + r[field], 0);
   const elapsed = sum(runs, 'elapsed_ms');
-  const other = runs.reduce((n, r) => n + r.elapsed_ms - r.prepare_ms - r.embedding_ms - r.readout_ms - sum(r.layers, 'read_ms') - sum(r.layers, 'pack_ms') - sum(r.layers, 'compute_ms'), 0);
+  const other = runs.reduce((n, r) => n + r.elapsed_ms - r.prepare_ms - r.embedding_ms - r.readout_ms - sum(r.layers, 'read_ms') - (r.queued_execution ? sum(r.layers, 'encode_enqueue_ms') + sum(r.layers, 'queue_wait_ms') : sum(r.layers, 'pack_ms') + sum(r.layers, 'compute_ms')), 0);
+  const queued = runs.some(r=>r.queued_execution);
   return {samples: runs.length, percentile_method: 'nearest-rank', min_ms: latencies[0], p50_ms: percentile(.5), p95_ms: percentile(.95), max_ms: latencies.at(-1), mean_ms: elapsed / runs.length,
     stddev_ms: Math.sqrt(latencies.reduce((n, x) => n + (x - elapsed / runs.length) ** 2, 0) / runs.length),
     requests_per_second: runs.length * 1000 / elapsed,
     input_tokens_per_second: runs.reduce((n, r) => n + r.response.usage.input_tokens, 0) * 1000 / elapsed,
-    mean_pack_ms: runs.reduce((n, r) => n + sum(r.layers, 'pack_ms'), 0) / runs.length,
-    mean_compute_ms: runs.reduce((n, r) => n + sum(r.layers, 'compute_ms'), 0) / runs.length,
+    mean_pack_ms: queued ? null : runs.reduce((n, r) => n + sum(r.layers, 'pack_ms'), 0) / runs.length,
+    mean_compute_ms: queued ? null : runs.reduce((n, r) => n + sum(r.layers, 'compute_ms'), 0) / runs.length,
+    mean_encode_enqueue_ms: queued ? runs.reduce((n,r)=>n+sum(r.layers,'encode_enqueue_ms'),0)/runs.length : null,
+    mean_queue_wait_ms: queued ? runs.reduce((n,r)=>n+sum(r.layers,'queue_wait_ms'),0)/runs.length : null,
     mean_weight_read_wait_and_upload_ms: runs.reduce((n, r) => n + sum(r.layers, 'read_ms'), 0) / runs.length,
     mean_prepare_ms: sum(runs, 'prepare_ms') / runs.length, mean_embedding_ms: sum(runs, 'embedding_ms') / runs.length, mean_readout_ms: sum(runs, 'readout_ms') / runs.length,
     mean_scheduling_and_other_ms: other / runs.length,
@@ -212,7 +215,7 @@ async function benchmark(message, signal) {
     environment: {user_agent: navigator.userAgent, hardware_concurrency: navigator.hardwareConcurrency, device_memory_gib_hint: navigator.deviceMemory ?? null, cross_origin_isolated: crossOriginIsolated},
     initialization: {model_ms: modelInit, wasm_module_ms: build.module_init_ms, wasm_instance_reused: true, model_reinitialized: true},
     input: {request, max_length: maxLength, prefetch}, warmups: warmupRuns, runs, summary: summarize(runs), download: lastDownload,
-    notes: ['Inference includes local weight reads, Wasm uploads, packing, and compute. Download, SHA-256 verification, and initialization are excluded.', 'Prefetched reads overlap compute: read_ms is blocked wait plus Wasm upload, not total storage I/O time.', 'Wasm linear memory is not process RSS and excludes JavaScript and worker buffers.', 'Token throughput measures input processing, not generation. Small samples do not establish stable tail latency.', backend === 'webgpu' ? 'Decoder runs on WebGPU; tokenization and final decision readout run on Wasm CPU. Layer compute includes command encoding and completion waits; no GPU timestamps. BF16 weights stream each run; this is not a resident-model benchmark.' : 'Wasm CPU execution; no GPU timestamps.']};
+    notes: ['Inference includes local weight reads, Wasm uploads, packing, and compute. Download, SHA-256 verification, and initialization are excluded.', 'Queued WebGPU reports CPU encode_enqueue_ms and queue_wait_ms, with pack_ms and compute_ms unavailable. submission_to_collection_ms includes GPU queueing and delayed collection; it is not GPU compute time. read_ms is host weight wait and upload time and can overlap GPU execution.', 'Wasm linear memory is not process RSS and excludes JavaScript and worker buffers.', 'Token throughput measures input processing, not generation. Small samples do not establish stable tail latency.', backend === 'webgpu' ? 'Decoder runs on WebGPU; tokenization and final decision readout run on Wasm CPU. Layer compute includes command encoding and completion waits; no GPU timestamps. Prefetch uploads BF16 weights into two isolated banks; physical copy/compute overlap depends on the browser and driver.' : 'Wasm CPU execution; no GPU timestamps.']};
 }
 
 self.onmessage = async ({data}) => {

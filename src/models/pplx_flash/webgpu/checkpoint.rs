@@ -191,7 +191,18 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         &mut self,
         tensors: &HashMap<String, Tensor>,
     ) -> Result<()> {
-        ensure!(self.q4.is_none(), "Q4 experiments require resident weights");
+        let encoder = self.encode_checkpoint_weights(tensors)?;
+        self.device.read(encoder, &self.dummy, 1).await?;
+        Ok(())
+    }
+    pub(crate) fn prepare_queued_weights(&mut self, tensors: &HashMap<String, Tensor>) -> Result<()> {
+        if self.int8.is_some() {
+            let encoder = self.encode_checkpoint_weights(tensors)?;
+            self.device.submit_commands(encoder);
+        }
+        Ok(())
+    }
+    fn encode_checkpoint_weights(&mut self, tensors: &HashMap<String, Tensor>) -> Result<CommandEncoder> {
         let mut encoder = self.device.encoder();
         if let Some(state) = self.int8.as_mut() {
             state.clear();
@@ -208,21 +219,24 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             {
                 continue;
             }
-            let packed = self.quantize_int8(
-                &mut encoder,
-                &tensor.buffer,
-                tensor.shape[0],
-                tensor.shape[1],
-                true,
-            )?;
+            let packed = if self.q4.is_some() {
+                self.quantize_q4(&mut encoder, &tensor.buffer, tensor.shape[0], tensor.shape[1])?
+            } else {
+                self.quantize_int8(
+                    &mut encoder,
+                    &tensor.buffer,
+                    tensor.shape[0],
+                    tensor.shape[1],
+                    true,
+                )?
+            };
             self.int8
                 .as_mut()
                 .unwrap()
                 .weights
                 .push((tensor.buffer.clone(), packed));
         }
-        self.device.read(encoder, &self.dummy, 1).await?;
-        Ok(())
+        Ok(encoder)
     }
     pub(crate) fn clear_checkpoint_weights(&mut self) {
         if let Some(state) = self.int8.as_mut() {

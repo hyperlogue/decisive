@@ -81,7 +81,8 @@ self.onmessage=async({data})=>{
       const runs=report.runs.filter(r=>r.fixture===fixture&&!r.warmup),baseline=runs.filter(r=>r.mode===data.modes[0]);
       const variants=Object.fromEntries(data.modes.map(mode=>{
         const samples=runs.filter(r=>r.mode===mode),times=samples.map(r=>r.elapsed_ms),center=median(times);
-        return[mode,{samples_ms:times,median_ms:center,relative_mad:median(times.map(t=>Math.abs(t-center)))/center,median_compute_ms:median(samples.map(r=>r.layers.reduce((s,l)=>s+l.compute_ms,0))),median_weight_preparation_ms:median(samples.map(r=>r.layers.reduce((s,l)=>s+l.pack_ms,0))),input_tokens:samples[0].response.usage.input_tokens}];
+        const phase=field=>samples.some(r=>r.layers.some(l=>l[field]==null))?null:median(samples.map(r=>r.layers.reduce((s,l)=>s+l[field],0)));
+        return[mode,{samples_ms:times,median_ms:center,relative_mad:median(times.map(t=>Math.abs(t-center)))/center,median_compute_ms:phase('compute_ms'),median_weight_preparation_ms:phase('pack_ms'),median_encode_enqueue_ms:phase('encode_enqueue_ms'),median_queue_wait_ms:phase('queue_wait_ms'),input_tokens:samples[0].response.usage.input_tokens}];
       }));
       const paired=runs.filter(r=>r.mode===data.modes[1]).map(run=>{
         const ref=baseline.find(b=>b.round===run.round),difference=logits(run,ref);

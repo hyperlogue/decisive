@@ -1,0 +1,78 @@
+<!doctype html><meta charset="utf-8"><title>PPLX GPU double-buffer correctness</title>
+<pre id="status">Running…</pre>
+<script type="module">
+async function check(api,mode,queued){
+  const probe=await api.PplxFlashStreamingCheck.create(mode),buffers=probe.weightBuffers();
+  const assert=(ok,message)=>{if(!ok)throw Error(message);};
+  const rejected=fn=>{try{fn();return false;}catch{return true;}};
+  const upload=layer=>{
+    const n=layer%4===3?9:7,bytes=new Uint8Array(n*16*2),view=new DataView(bytes.buffer);
+    for(let row=0;row<n;row++)for(let col=0;col<16;col++){
+      const f=new Float32Array([((row*5+col*3+layer*7)%31-15)/8]);
+      view.setUint16((row*16+col)*2,new Uint32Array(f.buffer)[0]>>>16,true);
+    }
+    buffers.stageTensor(layer,`language_model.layers.${layer}.probe.weight`,bytes);
+    assert(rejected(()=>buffers.finishUpload(layer)),'incomplete bank accepted');
+    const norm=new Uint16Array(16).fill(0x3f80);
+    buffers.stageTensor(layer,`language_model.layers.${layer}.probe.norm`,new Uint8Array(norm.buffer));
+    assert(rejected(()=>buffers.stageTensor(layer,`language_model.layers.${layer}.probe.norm`,new Uint8Array(norm.buffer))),'duplicate tensor accepted');
+    buffers.finishUpload(layer);
+  };
+  let inFlightChecks=0,activeBankChecks=0,running=null;
+  try{
+    // Reset/reuse across complete requests as well as all 32 layer swaps.
+    const runs=[];
+    for(let round=0;round<2;round++){
+      probe.begin();
+      if(queued){
+        let pending=0;
+        for(let layer=0;layer<32;layer++){
+          if(pending===2){await probe.waitLayer();pending--;}
+          upload(layer);probe.queueLayer();pending++;
+          const state=JSON.parse(buffers.diagnostics());
+          assert(state.in_flight_layers.length===pending,'queued layer tracking differs');inFlightChecks++;
+          assert(rejected(()=>buffers.reset()),'queued banks were reset');
+          assert(rejected(()=>buffers.stageTensor(layer,`language_model.layers.${layer}.probe.norm`,new Uint8Array(32))),'queued bank overwritten');activeBankChecks++;
+          if(pending===2)assert(rejected(()=>probe.queueLayer()),'queue exceeded two layers');
+        }
+        while(pending){await probe.waitLayer();pending--;}
+        const run=JSON.parse(probe.finish());
+        assert(run.weight_buffers.peak_in_flight_layers===2,'second layer was not queued before collection');
+        runs.push(run);continue;
+      }
+      upload(0);
+      for(let layer=0;layer<32;layer++){
+        const submitted=buffers.whenSubmitted(layer);running=probe.runLayer();
+        running.catch(()=>{});
+        await submitted;
+        assert(JSON.parse(buffers.diagnostics()).computing_layer===layer,'layer completed before the upload window');inFlightChecks++;
+        assert(rejected(()=>buffers.reset()),'in-flight banks were reset');
+        assert(rejected(()=>buffers.stageTensor(layer,`language_model.layers.${layer}.probe.norm`,new Uint8Array(32))),'active bank overwritten');activeBankChecks++;
+        if(layer<31)upload(layer+1);
+        await running;running=null;
+      }
+      runs.push(JSON.parse(probe.finish()));
+    }
+    return {passed:true,mode,queued,runs,in_flight_checks:inFlightChecks,active_bank_checks:activeBankChecks};
+  }finally{if(running)await Promise.allSettled([running]);buffers.free();probe.free();}
+}
+try{
+  const q=new URLSearchParams(location.search),pkg=q.get('package'),mode=q.get('mode')??'bf16',queued=q.get('queued')==='1';
+  if(!pkg?.startsWith('/artifacts/web/'))throw Error('Local Wasm package required');
+  const build=await(await fetch(pkg+'/build.json')).json();
+  const bytes=await(await fetch(pkg+'/decisive_bg.wasm')).arrayBuffer();
+  const wasm_sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
+  if(wasm_sha256!==build.wasm_sha256)throw Error('Wasm checksum mismatch');
+  if(q.get('worker')==='1'){
+    const url=URL.createObjectURL(new Blob([`import init,* as api from ${JSON.stringify(new URL(pkg+'/decisive.js',location.href).href)};const check=${check.toString()};onmessage=async({data})=>{try{await init({module_or_path:data.bytes});postMessage(await check(api,data.mode,data.queued));}catch(e){postMessage({error:String(e)});}};`],{type:'text/javascript'}));
+    const worker=new Worker(url,{type:'module'});
+    try{window.result=await new Promise((resolve,reject)=>{worker.onmessage=e=>resolve(e.data);worker.onerror=e=>reject(Error(e.message));worker.postMessage({bytes,mode,queued},[bytes]);});}
+    finally{worker.terminate();URL.revokeObjectURL(url);}
+  }else{
+    const api=await import(pkg+'/decisive.js');await api.default({module_or_path:bytes});
+    window.result=await check(api,mode,queued);
+  }
+  window.result={...window.result,worker:q.get('worker')==='1',wasm_sha256,features:build.features};
+}catch(error){window.result={error:String(error)};}
+document.querySelector('#status').textContent=JSON.stringify(window.result,null,2);
+</script>

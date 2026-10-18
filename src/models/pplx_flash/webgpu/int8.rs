@@ -17,8 +17,12 @@ impl State {
             .map(|(_, packed)| packed.clone())
     }
     pub fn clear(&mut self) {
-        for (_, packed) in self.weights.drain(..) {
-            let pool = self.pool.get_mut();
+        let weights = std::mem::take(&mut self.weights);
+        self.recycle(weights);
+    }
+    pub fn recycle(&self, weights: Vec<(Buffer, Buffer)>) {
+        let mut pool = self.pool.borrow_mut();
+        for (_, packed) in weights {
             if pool.iter().map(Buffer::size).sum::<u64>() + packed.size() <= 192 * 1024 * 1024 {
                 pool.push(packed);
             } else {

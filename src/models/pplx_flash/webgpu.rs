@@ -3,6 +3,9 @@ mod checkpoint;
 #[cfg(feature = "kernel-checks")]
 pub(super) mod checks;
 mod device;
+pub(super) mod streaming;
+#[cfg(feature = "kernel-checks")]
+mod streaming_check;
 #[cfg(feature = "kernel-checks")]
 mod int8;
 #[cfg(feature = "kernel-checks")]
@@ -20,9 +23,18 @@ use std::{
 };
 use wgpu::{Buffer, CommandEncoder, ComputePipeline};
 
+#[derive(Clone)]
 pub(super) struct Tensor {
     pub shape: Vec<usize>,
     pub buffer: Buffer,
+}
+pub(super) struct QueuedLayer {
+    completion: device::Completion,
+    scratch: Vec<Buffer>,
+    #[cfg(feature = "kernel-checks")]
+    quantized: Vec<(Buffer, Buffer)>,
+    #[cfg(feature = "kernel-checks")]
+    q4_expansion: Option<Buffer>,
 }
 pub(super) struct Gpu {
     device: Device,
@@ -221,6 +233,7 @@ impl Gpu {
         }
     }
     pub fn reset(&mut self) {
+        self.device.discard_pending();
         self.discard_scratch();
         for b in self.scratch_pool.borrow_mut().drain(..) {
             b.destroy();
@@ -464,12 +477,68 @@ impl Gpu {
         )?;
         Ok(y)
     }
+    #[cfg(feature = "kernel-checks")]
     pub async fn layer(
         &mut self,
         tensors: &HashMap<String, Tensor>,
         index: usize,
         markers: Option<&[usize]>,
     ) -> Result<()> {
+        self.layer_submitted(tensors, index, markers, || {}).await
+    }
+    pub async fn layer_submitted(
+        &mut self,
+        tensors: &HashMap<String, Tensor>,
+        index: usize,
+        markers: Option<&[usize]>,
+        submitted: impl FnOnce(),
+    ) -> Result<()> {
+        let (encoder, output, rows) = self.encode_layer(tensors, index, markers)?;
+        self.device.read_submitted(encoder, &output, 1, submitted).await?;
+        for buffer in self.advance_layer(output, rows) { self.release_scratch(buffer); }
+        Ok(())
+    }
+    pub fn supports_queued(&self) -> bool { self.device.profile.is_none() }
+    pub async fn wait_idle(&self) -> Result<()> { self.device.idle_completion().wait().await }
+    pub fn queue_layer(
+        &mut self,
+        tensors: &HashMap<String, Tensor>,
+        index: usize,
+        markers: Option<&[usize]>,
+    ) -> Result<QueuedLayer> {
+        ensure!(self.supports_queued(), "queued execution does not support per-layer profiling");
+        let (encoder, output, rows) = self.encode_layer(tensors, index, markers)?;
+        Ok(self.queue_encoded(encoder, output, rows))
+    }
+    fn queue_encoded(&mut self, encoder: CommandEncoder, output: Buffer, rows: usize) -> QueuedLayer {
+        let completion = self.device.submit_deferred(encoder);
+        let scratch = self.advance_layer(output, rows);
+        QueuedLayer {
+            completion, scratch,
+            #[cfg(feature = "kernel-checks")]
+            quantized: self.int8.as_mut().map(|s| std::mem::take(&mut s.weights)).unwrap_or_default(),
+            #[cfg(feature = "kernel-checks")]
+            q4_expansion: self.q4_expansion.take(),
+        }
+    }
+    pub async fn collect_layer(&mut self, layer: QueuedLayer) -> Result<()> {
+        let result = layer.completion.wait().await;
+        for buffer in layer.scratch { self.release_scratch(buffer); }
+        #[cfg(feature = "kernel-checks")]
+        if let Some(state) = &self.int8 { state.recycle(layer.quantized); }
+        #[cfg(feature = "kernel-checks")]
+        if let Some(buffer) = layer.q4_expansion {
+            if self.q4_expansion.is_none() { self.q4_expansion = Some(buffer); }
+            else { buffer.destroy(); }
+        }
+        result
+    }
+    fn encode_layer(
+        &mut self,
+        tensors: &HashMap<String, Tensor>,
+        index: usize,
+        markers: Option<&[usize]>,
+    ) -> Result<(CommandEncoder, Buffer, usize)> {
         ensure!(
             index < 32 && (markers.is_none() || index == 31),
             "invalid GPU layer/pruning"
@@ -790,20 +859,17 @@ impl Gpu {
             D,
         )?;
         let output = self.point(&mut e, &residual, &down, nq * D, 0)?;
-        // A four-byte fence bounds in-flight weights to one layer without reading activations back.
-        self.device.read(e, &output, 1).await?;
+        Ok((e, output, nq))
+    }
+    fn advance_layer(&mut self, output: Buffer, rows: usize) -> Vec<Buffer> {
         self.packed_cache.borrow_mut().clear();
-        for b in self.scratch.borrow_mut().drain(..) {
-            if b != output {
-                self.release_scratch(b);
-            }
-        }
+        let mut retired: Vec<_> = self.scratch.borrow_mut().drain(..).filter(|b| b != &output).collect();
         if let Some(old) = self.hidden.take() {
-            self.release_scratch(old);
+            retired.push(old);
         }
         self.hidden = Some(output);
-        self.rows = nq;
-        Ok(())
+        self.rows = rows;
+        retired
     }
     pub async fn read_hidden(&self) -> Result<Vec<f32>> {
         self.device

@@ -50,7 +50,15 @@ def analyze(path):
         for chunk in run['diagnostics']['logits']:
             assert len(chunk['keys'])==len(chunk['values'])
             assert all(1<=len(row)<=255 for row in chunk['values'])
-        assert sum(l['compute_ms']+l['pack_ms'] for l in run['layers'])<=run['elapsed_ms']+2
+        if run.get('queued_execution'):
+            assert not resident and run['max_in_flight_layers']==2
+            assert run['weight_buffers']['peak_in_flight_layers']<=2
+            assert all(l['compute_ms'] is None and l['pack_ms'] is None for l in run['layers'])
+            fields=['encode_enqueue_ms','queue_wait_ms','read_ms']
+            assert all(math.isfinite(l[f]) and l[f]>=0 for l in run['layers'] for f in fields)
+            assert sum(l[f] for l in run['layers'] for f in fields)<=run['elapsed_ms']+2
+        else:
+            assert sum(l['compute_ms']+l['pack_ms'] for l in run['layers'])<=run['elapsed_ms']+2
         if precision(run['mode']) in ['w8a8','w4a8']:
             assert not any(d['kernel'] in ['gemm','mlp_fused','gemm_small','mlp_small']
                            for layer in run['layers'] for d in (layer.get('profile') or {}).get('dispatches',[])), 'FP16 projection fallback'
@@ -66,13 +74,18 @@ def analyze(path):
         candidate={r['round']:r for r in runs if r['mode']==modes[-1]}
         assert set(baseline)==set(candidate)==set(range(spec['rounds']))
         variants={}
+        def phase(samples, field):
+            if any(l.get(field) is None for r in samples for l in r['layers']):return None
+            return median(sum(l[field] for l in r['layers']) for r in samples)
         for mode in modes:
             samples=[r for r in runs if r['mode']==mode];times=[r['elapsed_ms'] for r in samples];center=median(times)
             variants[mode]={'median_ms':center,'samples_ms':times,'relative_mad':median(abs(t-center) for t in times)/center,
                 'input_tokens':samples[0]['response']['usage']['input_tokens'],
-                'median_compute_ms':median(sum(l['compute_ms'] for l in r['layers']) for r in samples),
+                'median_compute_ms':phase(samples,'compute_ms'),
                 'median_read_and_upload_ms':median(sum(l['read_ms'] for l in r['layers']) for r in samples),
-                'median_weight_preparation_ms':median(sum(l['pack_ms'] for l in r['layers']) for r in samples)}
+                'median_weight_preparation_ms':phase(samples,'pack_ms'),
+                'median_encode_enqueue_ms':phase(samples,'encode_enqueue_ms'),
+                'median_queue_wait_ms':phase(samples,'queue_wait_ms')}
         if len(modes)==1:
             result['cases'].append({'fixture':fixture,'variants':variants,'clears_complexity_threshold':False})
             continue

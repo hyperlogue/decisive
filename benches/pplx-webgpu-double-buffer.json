@@ -1,0 +1,93 @@
+{
+  "scope": "PPLX streamed WebGPU double-buffer correctness; no hardware throughput claim",
+  "checkpoint_revision": "6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d",
+  "weight_banks": 2,
+  "default": "Enabled for streamed WebGPU with prefetch; resident loading remains separate",
+  "scheduling": "Submit layer i compute, enqueue layer i+1 weights into the other bank, await both, then swap. Reuse a bank only after its previous compute completes.",
+  "bank_storage": "Raw BF16 weights; active FP16/INT8/Q4 conversions and activations are additional allocations",
+  "validation": {
+    "production_wasm_check": "passed",
+    "kernel_checks_wasm_build": "passed",
+    "runtime_checks": [
+      "uploads between compute submission and completion",
+      "model borrow isolation",
+      "serial and double-buffered output parity",
+      "multiple chunks and repeated requests",
+      "delayed reads, read failures, and compute failures before/after submission",
+      "in-flight disposal prevention, read/compute draining, and retries",
+      "timing summaries do not count overlapping uploads twice",
+      "resident runtime and embedding-cache regressions"
+    ],
+    "gpu_streaming": {
+      "mode": "bf16",
+      "contexts": [
+        "main thread",
+        "worker"
+      ],
+      "requests_per_context": 2,
+      "layer_computations": 128,
+      "max_absolute_error": 0,
+      "in_flight_checks": 128,
+      "active_bank_guards": 128,
+      "synthetic_peak_raw_weight_bytes": 576,
+      "reused_tensor_buffers_per_request": [
+        45,
+        45,
+        45,
+        45
+      ]
+    },
+    "existing_kernels": {
+      "contexts": 2,
+      "checks_per_context": 14,
+      "max_absolute_error": 2.384185791015625e-07
+    },
+    "full_checkpoint": {
+      "fixture": "request",
+      "input_tokens": 117,
+      "sequences": 1,
+      "completed_layers": 32,
+      "max_absolute_reference_error": 1.4960749972203757e-08,
+      "max_absolute_previous_webgpu_error": 0.0,
+      "weight_buffers": {
+        "banks": 2,
+        "raw_weight_bytes": 440817024,
+        "peak_raw_weight_bytes": 451695360,
+        "tensor_uploads": 424,
+        "reused_buffers": 315,
+        "bank_layers": [
+          null,
+          null
+        ],
+        "computing_layer": null,
+        "scope": "raw BF16 weight banks; excludes active converted/quantized weights and activations",
+        "overlap": "uploads enqueued after compute submission and before its completion wait; hardware overlap is implementation-dependent"
+      },
+      "decoder_weight_bytes_read": 7140099072
+    }
+  },
+  "limitations": [
+    "SwiftShader correctness checks; physical DMA/compute overlap and speedup require a hardware GPU measurement",
+    "WebGPU uses one queue; concurrent JavaScript submission does not guarantee parallel GPU copy/compute execution",
+    "Configured FP16/INT8/Q4 paths compile but were not GPU-tested here because the adapter lacks shader-f16",
+    "Full-checkpoint parity covers one saved fixture, not a model-quality evaluation"
+  ],
+  "provenance": {
+    "wasm_sha256": "17a45bd8e35509a487ca00ae508e969750f81c33dea8b6872a7e4d501ea8fa87",
+    "end_to_end_runtime_sha256": "46dc31dfecf6ba29af85cc00e0a6b3f9d0c7961b7c0a264e99b8bee7ce5b5247",
+    "packaged_runtime_sha256": "8304e3a31cae48f7d5c89af8baae0533473c5ead21f8aa904a114586f8724f26",
+    "runtime_difference": "Timing accounting only; final accounting validated by the runtime checks",
+    "features": "pplx-flash,wasm,webgpu,kernel-checks",
+    "software_gpu": true,
+    "artifacts": "benchmark-runs/pplx-double-buffer-20261018",
+    "browser_bundle": "artifacts/web/pplx-double-buffer-20261018"
+  },
+  "reproduce": {
+    "build": "DECISIVE_PPLX_CHECKS=1 bash scripts/pplx_flash/build_browser.sh artifacts/web/pplx-double-buffer-check",
+    "runtime": "node scripts/pplx_flash/check_double_buffer_runtime.mjs",
+    "streaming_page": "/examples/browser/pplx_flash_double_buffer.html?package=/artifacts/web/pplx-double-buffer-check/pkg&mode=bf16&worker=0",
+    "worker": "Repeat the streaming page with worker=1",
+    "end_to_end_page": "/examples/browser/pplx_flash.html?package=/artifacts/web/pplx-double-buffer-check/pkg&fixture=request&backend=webgpu",
+    "runner": "target/benchmarks/browser_bench --browser \"$CHROMIUM\" --page \"$PAGE\" --output \"$REPORT\" --timeout-seconds 900"
+  }
+}

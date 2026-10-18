@@ -32,6 +32,13 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
   if (backend === "webgpu" && !api.PplxFlashWebGpu) throw Error("Build this package with the webgpu feature");
   if(configuration && (backend!=="webgpu" || !api.PplxFlashWebGpu?.createConfigured))throw Error('Configured checkpoint checks require a kernel-checks WebGPU build');
   const model=configuration ? await api.PplxFlashWebGpu.createConfigured(...data,JSON.stringify(headers),configuration.mode,Boolean(configuration.profile)) : backend === "webgpu" ? await api.PplxFlashWebGpu.create(...data,JSON.stringify(headers)) : new api.PplxFlashModel(...data,JSON.stringify(headers));
+  let weightBuffers=null;
+  if(backend==='webgpu'&&!resident&&configuration?.doubleBuffering!==false){
+    try{
+      if(typeof model.weightBuffers!=='function')throw Error('GPU double buffering requires an updated Wasm build');
+      weightBuffers=model.weightBuffers();
+    }catch(error){model.free();throw error;}
+  }
   let adapter=backend === "webgpu" ? JSON.parse(model.adapter()) : null;
   const tensor=async name=>{const r=JSON.parse(model.tensorRange(name));return read(files[r.file],r.start,r.end);};
   const embedding=JSON.parse(model.tensorRange('language_model.embed_tokens.weight'));
@@ -54,7 +61,7 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
         if(data.error)waiting.reject(Error(data.error));
         else{transferred+=data.buffers.reduce((n,b)=>n+b.byteLength,0);waiting.resolve(data.buffers);}
       };
-      worker.onerror=event=>{for(const p of pendingReads.values())p.reject(Error(event.message));pendingReads.clear();};
+      worker.onerror=event=>{for(const p of pendingReads.values())p.reject(Error(event.message));pendingReads.clear();worker.terminate();worker=undefined;};
     }
     const id=sequence++;
     const promise=new Promise((resolve,reject)=>pendingReads.set(id,{resolve,reject}));
@@ -79,12 +86,13 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
     }catch(error){worker?.terminate();embeddingCache.clear();model.free();throw error;}
   }
   const startup={elapsed_ms:performance.now()-initializationStart,bytes_read:transferred,
-    weight_residency:resident?'all-decoder-layers':'one-layer',
+    weight_residency:resident?'all-decoder-layers':weightBuffers?'two-layer-banks':'one-layer',
     resident_decoder_weight_bytes:adapter?.resident_decoder_weight_bytes??0};
-  return {model,startup,dispose(){if(busy)throw Error("Inference is still running");worker?.terminate();embeddingCache.clear();model.free();},async predict(request,maxLength=2048,prefetch=true){
+  return {model,startup,dispose(){if(busy)throw Error("Inference is still running");worker?.terminate();embeddingCache.clear();weightBuffers?.free();model.free();},async predict(request,maxLength=2048,prefetch=true){
     if(busy)throw Error("One request per model instance may run at a time");
     busy=true;
     try{
+    const queued=Boolean(weightBuffers&&prefetch&&configuration?.queued!==false&&model.supportsQueued?.());
     const start=performance.now(),chunks=JSON.parse(model.prepare(JSON.stringify(request),maxLength)),timings=[];
     const prepare_ms=performance.now()-start;let embedding_ms=0,readout_ms=0,decoder_weight_bytes_read=0;
     const embedding_cache={hits:0,misses:0,retained_bytes:0,capacity_bytes:0};
@@ -95,6 +103,100 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
       embedding_cache.hits+=cached.hits;embedding_cache.misses+=cached.misses;
       embedding_cache.retained_bytes=cached.retained_bytes;embedding_cache.capacity_bytes=cached.capacity_bytes;
       embedding_ms+=performance.now()-embeddingStart;
+      if(queued){
+        let reading=loadLayer(0,true),lookahead=null,pending=0;
+        const first=timings.length;
+        const collect=async()=>{
+          const completed=JSON.parse(await model.waitLayer());
+          Object.assign(timings[first+completed.layer],completed);
+          pending--;
+        };
+        try{
+          for(let layer=0;layer<32;layer++){
+            progress(`Layer ${layer+1}/32`);
+            const readStart=performance.now(),groups=await reading,loaded=performance.now();
+            // Read the next layer while the queue executes this one. Fetch its
+            // range plan before waitLayer acquires an exclusive Wasm borrow.
+            lookahead=layer<31?loadLayer(layer+1,true):null;
+            if(pending===2)await collect();
+            const uploadStart=performance.now();
+            for(const {group,lo,bytes} of groups){
+              decoder_weight_bytes_read+=bytes.length;
+              for(const r of group)weightBuffers.stageTensor(layer,r.name,bytes.subarray(r.start-lo,r.end-lo));
+            }
+            weightBuffers.finishUpload(layer);
+            const uploaded=performance.now();
+            const phases=JSON.parse(model.queueLayer());
+            pending++;
+            timings.push({chunk:first/32,layer,...phases,read_ms:loaded-readStart+uploaded-uploadStart,
+              read_wait_ms:loaded-readStart,upload_enqueue_ms:uploaded-uploadStart,
+              weight_bank:layer%2,gpu_upload_prefetch:layer<31,queue_wait_ms:0});
+            reading=lookahead;lookahead=null;
+          }
+          while(pending)await collect();
+        }catch(error){
+          // The model owns all submitted resources until abortQueued drains
+          // them, including work submitted before an encoding failure.
+          const drained=await Promise.allSettled([reading,lookahead,model.abortQueued()]);
+          if(drained[2].status==='rejected')throw new AggregateError([error,drained[2].reason],'Queued inference and cleanup failed');
+          throw error;
+        }
+      }else if(weightBuffers){
+        const upload=async(layer,reading)=>{
+          const start=performance.now(),groups=await reading,loaded=performance.now();
+          for(const {group,lo,bytes} of groups){
+            decoder_weight_bytes_read+=bytes.length;
+            for(const r of group)weightBuffers.stageTensor(layer,r.name,bytes.subarray(r.start-lo,r.end-lo));
+          }
+          weightBuffers.finishUpload(layer);
+          const done=performance.now();
+          return {read_ms:done-start,read_wait_ms:loaded-start,upload_enqueue_ms:done-loaded};
+        };
+        let uploaded=await upload(0,loadLayer(0,prefetch));
+        for(let layer=0;layer<32;layer++){
+          progress(`Layer ${layer+1}/32`);
+          const start=performance.now();
+          // ranges() borrows the model: obtain the next read plan before the
+          // asynchronous runLayer() acquires its exclusive Wasm borrow.
+          let next=null;
+          if(prefetch&&layer<31){
+            const reading=loadLayer(layer+1,true);
+            const submitted=weightBuffers.whenSubmitted(layer);
+            next=(async()=>{
+              try{await submitted;return await upload(layer+1,reading);}
+              finally{await Promise.allSettled([reading]);}
+            })();
+          }
+          let running;
+          try{
+            running=Promise.resolve(model.runLayer()).then(value=>({
+              phases:JSON.parse(value),pack_compute_ms:performance.now()-start
+            }));
+          }catch(error){
+            // A synchronous binding failure cannot notify the submission wait.
+            weightBuffers.reset();
+            if(next)await Promise.allSettled([next]);
+            throw error;
+          }
+          // Always drain both tasks on failure. In particular, an I/O error
+          // must not permit prepare/dispose while a layer still uses its bank.
+          const [computed,prefetched]=await Promise.allSettled([running,next]);
+          if(computed.status==='rejected')throw computed.reason;
+          if(prefetched.status==='rejected')throw prefetched.reason;
+          const pipeline_ms=performance.now()-start;
+          timings.push({chunk:timings.length/32|0,layer,...computed.value.phases,...uploaded,
+            pack_compute_ms:computed.value.pack_compute_ms,pipeline_ms,
+            weight_bank:layer%2,prefetch_schedule_ms:0,gpu_upload_prefetch:prefetch&&layer<31});
+          if(layer<31){
+            uploaded=next?prefetched.value:await upload(layer+1,loadLayer(layer+1,false));
+            // Keep read_ms additive with compute_ms for existing reports. The
+            // next bank only stalls the pipeline if its upload finishes later
+            // than this layer. Detailed read/upload intervals can overlap.
+            if(next)uploaded.read_ms=Math.max(0,pipeline_ms-computed.value.pack_compute_ms);
+          }
+          await new Promise(resolve=>setTimeout(resolve,0));
+        }
+      }else{
       let pending=resident?null:loadLayer(0,prefetch);
       for(let layer=0;layer<32;layer++){
         progress(`Layer ${layer+1}/32`);
@@ -111,13 +213,17 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
         if(!resident&&!prefetch&&layer<31)pending=loadLayer(layer+1,prefetch);
         await new Promise(resolve=>setTimeout(resolve,0));
       }
+      }
       const readoutStart=performance.now();await model.finishChunk(norm);readout_ms+=performance.now()-readoutStart;
     }
     const response=JSON.parse(model.result());
     const elapsed_ms=performance.now()-start;
-    return {response,backend,adapter,elapsed_ms,request_ms:resident?elapsed_ms:null,
+    return {response,backend,adapter:queued?{...adapter,timing:'queued execution: host encoding and completion collection; per-layer GPU compute time unavailable'}:adapter,elapsed_ms,request_ms:resident?elapsed_ms:null,
       timing_scope:resident?'warm-request':'streamed-request-diagnostic',decoder_weight_bytes_read,
-      prepare_ms,embedding_ms,embedding_cache,readout_ms,bytes_read:transferred-before,prefetch:!resident&&prefetch,fetch_worker:!resident&&prefetch,layers:timings,...(configuration?{configuration,diagnostics:JSON.parse(model.diagnostics())}:{})};
-    }finally{busy=false;}
+      prepare_ms,embedding_ms,embedding_cache,readout_ms,bytes_read:transferred-before,prefetch:!resident&&prefetch,fetch_worker:!resident&&prefetch,
+      double_buffered:Boolean(weightBuffers&&prefetch),weight_buffers:weightBuffers?JSON.parse(weightBuffers.diagnostics()):null,
+      queued_execution:queued,max_in_flight_layers:queued?2:1,
+      layers:timings,...(configuration?{configuration,diagnostics:JSON.parse(model.diagnostics())}:{})};
+    }catch(error){weightBuffers?.reset();throw error;}finally{busy=false;}
   }};
 }

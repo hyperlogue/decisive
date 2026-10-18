@@ -7,9 +7,9 @@ const query = new URLSearchParams(location.search);
 let worker, initialized = false, ready = false, busy = false, serial = 0, report, hiddenDuringRun = false;
 let measuredCount = 0;
 const pending = new Map();
-const seconds = ms => `${(ms / 1000).toFixed(2)} s`;
+const seconds = ms => ms == null ? '—' : `${(ms / 1000).toFixed(2)} s`;
 const size = bytes => `${(bytes / 2 ** 30).toFixed(2)} GiB`;
-const phaseSum = (r, name) => r.layers.reduce((n, layer) => n + layer[name], 0);
+const phaseSum = (r, name) => r.layers.some(layer=>layer[name]==null) ? null : r.layers.reduce((n, layer) => n + layer[name], 0);
 
 function status(text, error = false) { $('status').textContent = text; $('status').className = error ? 'error' : ''; window.progress = text; }
 function controls() {
@@ -41,7 +41,7 @@ function renderAnswer(response) {
 }
 function sample(data) {
   const r = data.result, row = document.createElement('tr');
-  for (const value of [data.warmup ? `Warmup ${data.index + 1}` : `Measured ${++measuredCount}`, seconds(r.elapsed_ms), seconds(phaseSum(r, 'read_ms')), seconds(phaseSum(r, 'pack_ms')), seconds(phaseSum(r, 'compute_ms')), r.response.usage.input_tokens]) {
+  for (const value of [data.warmup ? `Warmup ${data.index + 1}` : `Measured ${++measuredCount}`, seconds(r.elapsed_ms), seconds(phaseSum(r, 'read_ms')), seconds(phaseSum(r, r.queued_execution ? 'encode_enqueue_ms' : 'pack_ms')), seconds(phaseSum(r, r.queued_execution ? 'queue_wait_ms' : 'compute_ms')), r.response.usage.input_tokens]) {
     const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
   }
   $('samples').append(row); renderAnswer(r.response);

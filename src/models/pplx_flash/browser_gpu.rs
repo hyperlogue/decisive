@@ -1,5 +1,6 @@
 use super::*;
-use std::collections::HashMap;
+use std::{collections::{HashMap, VecDeque}, rc::Rc};
+use super::webgpu::streaming::WeightBuffers;
 use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 extern "C" {
@@ -9,10 +10,18 @@ extern "C" {
 fn error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
+struct PendingLayer {
+    layer: usize,
+    submitted_ms: f64,
+    work: webgpu::QueuedLayer,
+    tensors: HashMap<String, webgpu::Tensor>,
+}
 #[wasm_bindgen(js_name=PplxFlashWebGpu)]
 pub struct BrowserGpu {
     engine: Engine,
-    index: weights::Index,
+    index: Rc<weights::Index>,
+    buffers: Option<WeightBuffers>,
+    pending_layers: VecDeque<PendingLayer>,
     request: Value,
     chunks: Vec<input::Encoded>,
     chunk: usize,
@@ -92,6 +101,7 @@ impl BrowserGpu {
         json!({"logits":self.raw_logits}).to_string()
     }
     pub fn prepare(&mut self, request: &str, max_length: usize) -> Result<String, JsValue> {
+        if !self.pending_layers.is_empty() { return Err(error("queued layers must finish before preparing another request")); }
         let request: Value = serde_json::from_str(request).map_err(error)?;
         let chunks = self
             .engine
@@ -103,6 +113,7 @@ impl BrowserGpu {
                 "Pplx WebGPU currently supports at most 2048 tokens per sequence",
             ));
         }
+        if let Some(buffers) = &self.buffers { buffers.reset()?; }
         self.request = request;
         self.chunks = chunks;
         self.chunk = 0;
@@ -151,12 +162,14 @@ impl BrowserGpu {
             reconstruct_rows(&mut self.work.hidden, D, self.auxiliary_bits).map_err(error)?;
         }
         self.gpu.begin(&self.work.hidden).map_err(error)?;
+        if let Some(buffers) = &self.buffers { buffers.begin_chunk().map_err(error)?; }
         self.work.hidden.clear();
         self.started = true;
         self.layer = 0;
         Ok(())
     }
     pub fn tensor(&mut self, name: &str, bytes: Vec<u8>) -> Result<(), JsValue> {
+        if self.buffers.is_some() { return Err(error("use the separate weight uploader for buffered inference")); }
         if !self.started || self.layer >= 32 {
             return Err(error("no active layer"));
         }
@@ -179,6 +192,7 @@ impl BrowserGpu {
     #[cfg(feature = "kernel-checks")]
     #[wasm_bindgen(js_name=stageTensor)]
     pub fn stage_tensor(&mut self, layer: usize, name: &str, bytes: &[u8]) -> Result<(), JsValue> {
+        if self.buffers.is_some() { return Err(error("resident and double-buffered weights are mutually exclusive")); }
         if !self.benchmark || !self.chunks.is_empty() || layer != self.resident_layers.len() || layer >= 32 {
             return Err(error("resident weights must be loaded in order before preparing a request"));
         }
@@ -195,6 +209,7 @@ impl BrowserGpu {
     #[cfg(feature = "kernel-checks")]
     #[wasm_bindgen(js_name=cacheLayer)]
     pub async fn cache_layer(&mut self, layer: usize) -> Result<(), JsValue> {
+        if self.buffers.is_some() { return Err(error("resident and double-buffered weights are mutually exclusive")); }
         if !self.benchmark || !self.chunks.is_empty() || layer != self.resident_layers.len() || layer >= 32 {
             return Err(error("invalid resident layer load"));
         }
@@ -209,6 +224,11 @@ impl BrowserGpu {
     pub fn adapter(&self) -> String {
         #[allow(unused_mut)]
         let mut info = self.gpu.info();
+        if self.buffers.is_some() {
+            info["weight_residency"] = json!("two-layer-banks");
+            info["weight_buffer_banks"] = json!(2);
+            info["queued_streaming_supported"] = json!(self.gpu.supports_queued());
+        }
         #[cfg(feature = "kernel-checks")]
         if self.resident_layers.len() == 32 {
             info["weight_residency"] = json!("all-decoder-layers");
@@ -229,64 +249,92 @@ impl BrowserGpu {
         }
         info.to_string()
     }
+    #[wasm_bindgen(js_name=weightBuffers)]
+    pub fn weight_buffers(&mut self) -> Result<WeightBuffers, JsValue> {
+        if !self.chunks.is_empty() || self.started { return Err(error("configure buffering before preparing a request")); }
+        if !self.tensors.is_empty() { return Err(error("weights are already being staged through the model")); }
+        #[cfg(feature = "kernel-checks")]
+        if !self.resident_layers.is_empty() { return Err(error("resident and double-buffered weights are mutually exclusive")); }
+        let buffers = self.buffers.get_or_insert_with(|| self.gpu.weight_uploader(self.index.clone()));
+        Ok(buffers.clone())
+    }
     #[wasm_bindgen(js_name=runLayer)]
     pub async fn run_layer(&mut self) -> Result<String, JsValue> {
-        if !self.started || self.layer >= 32 {
-            return Err(error("no active layer"));
-        }
-        let resident = false;
-        #[cfg(feature = "kernel-checks")]
-        let resident = resident || self.resident_layers.len() == 32;
-        let pack_start = monotonic_now();
-        #[cfg(feature = "kernel-checks")]
-        if self.benchmark {
-            if !resident {
-                self.gpu.prepare_checkpoint_weights(&self.tensors).await.map_err(error)?;
-            }
-            self.gpu.start_profile();
-        }
-        let pack_ms = if resident { 0.0 } else { monotonic_now() - pack_start };
-        let start = monotonic_now();
-        let tensors = &self.tensors;
-        #[cfg(feature = "kernel-checks")]
-        let tensors = if resident { &self.resident_layers[self.layer] } else { tensors };
-        let result = self
-            .gpu
-            .layer(
-                tensors,
-                self.layer,
-                if self.layer == 31 {
-                    Some(&self.chunks[self.chunk].markers)
-                } else {
-                    None
-                },
-            )
-            .await;
-        #[cfg(feature = "kernel-checks")]
-        if !resident {
-            self.gpu.clear_checkpoint_weights();
-        }
-        for (_, t) in self.tensors.drain() {
+        if !self.pending_layers.is_empty() { return Err(error("collect queued layers before synchronous execution")); }
+        let result = self.run_layer_inner().await;
+        if result.is_err() {
             #[cfg(feature = "kernel-checks")]
-            self.gpu.retain_weight_buffer(t.buffer);
-            #[cfg(not(feature = "kernel-checks"))]
-            t.buffer.destroy();
+            if self.resident_layers.is_empty() { self.gpu.clear_checkpoint_weights(); }
+            for (_, tensor) in self.tensors.drain() { tensor.buffer.destroy(); }
+            self.gpu.reset();
+            self.started = false;
+            if let Some(buffers) = &self.buffers { buffers.fail(); }
         }
-        self.gpu.discard_scratch();
-        result.map_err(error)?;
-        let compute_ms = monotonic_now() - start;
-        #[allow(unused_mut)]
-        let mut profile = Value::Null;
+        result
+    }
+    #[wasm_bindgen(js_name=supportsQueued)]
+    pub fn supports_queued(&self) -> bool { self.buffers.is_some() && self.gpu.supports_queued() }
+
+    #[wasm_bindgen(js_name=queueLayer)]
+    pub fn queue_layer(&mut self) -> Result<String, JsValue> {
+        if !self.started || self.layer >= 32 || self.pending_layers.len() >= 2 || !self.supports_queued() {
+            return Err(error("queued layer unavailable; collect the oldest layer before reusing its bank"));
+        }
+        let start = monotonic_now();
+        let buffers = self.buffers.as_ref().unwrap();
+        for (name, tensor) in buffers.start_layer(self.layer).map_err(error)? {
+            self.tensors.insert(name, self.gpu.prepare_uploaded(&tensor).map_err(error)?);
+        }
         #[cfg(feature = "kernel-checks")]
-        if self.benchmark {
-            profile = self.gpu.finish_profile().await.map_err(error)?;
-        }
+        self.gpu.prepare_queued_weights(&self.tensors).map_err(error)?;
+        let work = self.gpu.queue_layer(&self.tensors, self.layer,
+            (self.layer == 31).then(|| self.chunks[self.chunk].markers.as_slice())).map_err(error)?;
+        buffers.queued(self.layer);
+        self.pending_layers.push_back(PendingLayer { layer:self.layer, submitted_ms:monotonic_now(),
+            work, tensors:std::mem::take(&mut self.tensors) });
         self.layer += 1;
-        Ok(json!({"pack_ms":pack_ms,"compute_ms":compute_ms,"profile":profile,"timing":"dispatch + synchronized GPU completion; optional weight preparation is reported in pack_ms"}).to_string())
+        Ok(json!({"layer":self.layer-1,"encode_enqueue_ms":monotonic_now()-start,
+            "pack_ms":null,"compute_ms":null,"profile":null,"in_flight_layers":self.pending_layers.len(),
+            "timing":"host encoding and submission only; completion is collected under backpressure; no per-layer GPU readback"}).to_string())
+    }
+    #[wasm_bindgen(js_name=waitLayer)]
+    pub async fn wait_layer(&mut self) -> Result<String, JsValue> {
+        let pending = self.pending_layers.pop_front().ok_or_else(|| error("no queued layer"))?;
+        let start = monotonic_now();
+        let result = self.gpu.collect_layer(pending.work).await;
+        let buffers = self.buffers.as_ref().unwrap();
+        for tensor in pending.tensors.into_values() {
+            if buffers.owns(&tensor.buffer) { continue; }
+            #[cfg(feature = "kernel-checks")]
+            self.gpu.retain_weight_buffer(tensor.buffer);
+            #[cfg(not(feature = "kernel-checks"))]
+            tensor.buffer.destroy();
+        }
+        buffers.collected(pending.layer);
+        result.map_err(error)?;
+        Ok(json!({"layer":pending.layer,"queue_wait_ms":monotonic_now()-start,
+            "submission_to_collection_ms":monotonic_now()-pending.submitted_ms}).to_string())
+    }
+    #[wasm_bindgen(js_name=abortQueued)]
+    pub async fn abort_queued(&mut self) -> Result<(), JsValue> {
+        let mut failure = None;
+        while !self.pending_layers.is_empty() {
+            if let Err(error) = self.wait_layer().await { failure = Some(error); }
+        }
+        // Preparation or encoding may have failed after submitting conversions.
+        // Drain these too before destroying their uniforms or weight buffers.
+        if let Err(error) = self.gpu.wait_idle().await { failure = Some(JsValue::from_str(&error.to_string())); }
+        #[cfg(feature = "kernel-checks")]
+        self.gpu.clear_checkpoint_weights();
+        for tensor in self.tensors.drain().map(|(_, t)| t) { tensor.buffer.destroy(); }
+        self.gpu.reset();
+        self.started = false;
+        if let Some(buffers) = &self.buffers { buffers.fail(); }
+        failure.map_or(Ok(()), Err)
     }
     #[wasm_bindgen(js_name=finishChunk)]
     pub async fn finish_chunk(&mut self, norm: &[u8]) -> Result<(), JsValue> {
-        if !self.started || self.layer != 32 || norm.len() != D * 2 {
+        if !self.started || self.layer != 32 || !self.pending_layers.is_empty() || norm.len() != D * 2 {
             return Err(error("unfinished chunk or invalid norm"));
         }
         let norm: Vec<_> = norm
@@ -316,6 +364,7 @@ impl BrowserGpu {
                     .map_err(error)?,
             );
         }
+        if let Some(buffers) = &self.buffers { buffers.end_chunk().map_err(error)?; }
         self.chunk += 1;
         self.started = false;
         Ok(())
@@ -341,6 +390,70 @@ pub async fn q4_check() -> Result<String, JsValue> {
 }
 
 impl BrowserGpu {
+    async fn run_layer_inner(&mut self) -> Result<String, JsValue> {
+        if !self.started || self.layer >= 32 {
+            return Err(error("no active layer"));
+        }
+        let resident = false;
+        #[cfg(feature = "kernel-checks")]
+        let resident = resident || self.resident_layers.len() == 32;
+        let pack_start = monotonic_now();
+        if let Some(buffers) = &self.buffers {
+            self.tensors = buffers.start_layer(self.layer).map_err(error)?.into_iter()
+                .map(|(name, tensor)| Ok((name, self.gpu.prepare_uploaded(&tensor)?)))
+                .collect::<Result<HashMap<_, _>>>().map_err(error)?;
+        }
+        #[cfg(feature = "kernel-checks")]
+        if self.benchmark {
+            if !resident {
+                self.gpu.prepare_checkpoint_weights(&self.tensors).await.map_err(error)?;
+            }
+            self.gpu.start_profile();
+        }
+        let pack_ms = if resident { 0.0 } else { monotonic_now() - pack_start };
+        let start = monotonic_now();
+        let tensors = &self.tensors;
+        #[cfg(feature = "kernel-checks")]
+        let tensors = if resident { &self.resident_layers[self.layer] } else { tensors };
+        let upload = self.buffers.clone();
+        let result = self
+            .gpu
+            .layer_submitted(
+                tensors,
+                self.layer,
+                if self.layer == 31 {
+                    Some(&self.chunks[self.chunk].markers)
+                } else {
+                    None
+                },
+                move || { if let Some(buffers) = upload { buffers.submitted(); } },
+            )
+            .await;
+        #[cfg(feature = "kernel-checks")]
+        if !resident {
+            self.gpu.clear_checkpoint_weights();
+        }
+        for (_, t) in self.tensors.drain() {
+            if self.buffers.as_ref().is_some_and(|b| b.owns(&t.buffer)) { continue; }
+            #[cfg(feature = "kernel-checks")]
+            self.gpu.retain_weight_buffer(t.buffer);
+            #[cfg(not(feature = "kernel-checks"))]
+            t.buffer.destroy();
+        }
+        self.gpu.discard_scratch();
+        result.map_err(error)?;
+        let compute_ms = monotonic_now() - start;
+        #[allow(unused_mut)]
+        let mut profile = Value::Null;
+        #[cfg(feature = "kernel-checks")]
+        if self.benchmark {
+            profile = self.gpu.finish_profile().await.map_err(error)?;
+        }
+        if let Some(buffers) = &self.buffers { buffers.finish_layer(self.layer); }
+        self.layer += 1;
+        Ok(json!({"pack_ms":pack_ms,"compute_ms":compute_ms,"profile":profile,"timing":"dispatch + synchronized GPU completion; optional weight preparation is reported in pack_ms"}).to_string())
+    }
+
     fn from_parts(
         gpu: webgpu::Gpu,
         config: &[u8],
@@ -355,7 +468,9 @@ impl BrowserGpu {
             gpu,
             engine: Engine::new(config, decision, joint, tokenizer, readout, false)
                 .map_err(error)?,
-            index: weights::Index::new(&headers).map_err(error)?,
+            index: Rc::new(weights::Index::new(&headers).map_err(error)?),
+            buffers: None,
+            pending_layers: VecDeque::new(),
             request: Value::Null,
             chunks: Vec::new(),
             chunk: 0,
@@ -400,4 +515,8 @@ pub fn quantize_rows(values: &[f32], columns: usize, bits: u32) -> Result<Vec<f3
     let mut output = values.to_vec();
     reconstruct_rows(&mut output, columns, bits).map_err(error)?;
     Ok(output)
+}
+
+impl Drop for BrowserGpu {
+    fn drop(&mut self) { if let Some(buffers) = &self.buffers { buffers.close(); } }
 }

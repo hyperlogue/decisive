@@ -65,5 +65,24 @@ class RequestTiming(unittest.TestCase):
         data=report();data['runs'][-1]['diagnostics']['logits'][0]['values'][0][0]+=1
         with self.assertRaisesRegex(AssertionError,'logits'):self.analyze(data)
 
+    def test_queued_timing_is_not_reported_as_zero_compute(self):
+        data=report();data['timing_scope']='streamed-request-diagnostic'
+        for run in data['runs']:
+            run.update(queued_execution=True,max_in_flight_layers=2,bytes_read=7140099072,
+                       weight_buffers={'peak_in_flight_layers':2})
+            for layer in run['layers']:
+                layer.update(compute_ms=None,pack_ms=None,encode_enqueue_ms=.2,queue_wait_ms=.3)
+        variants=self.analyze(data)['cases'][0]['variants']
+        for variant in variants.values():
+            self.assertIsNone(variant['median_compute_ms'])
+            self.assertIsNone(variant['median_weight_preparation_ms'])
+            self.assertAlmostEqual(variant['median_encode_enqueue_ms'],6.4)
+            self.assertAlmostEqual(variant['median_queue_wait_ms'],9.6)
+        layer=data['runs'][0]['layers'][0]
+        layer['compute_ms']=0
+        with self.assertRaises(AssertionError):self.analyze(data)
+        layer['compute_ms']=None;layer['queue_wait_ms']=1000
+        with self.assertRaises(AssertionError):self.analyze(data)
+
 
 if __name__=='__main__':unittest.main()
