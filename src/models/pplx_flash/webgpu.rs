@@ -1,11 +1,23 @@
 #[cfg(feature = "kernel-checks")]
+mod checkpoint;
+#[cfg(feature = "kernel-checks")]
 pub(super) mod checks;
 mod device;
+#[cfg(feature = "kernel-checks")]
+mod int8;
+#[cfg(feature = "kernel-checks")]
+pub(super) mod q4;
+mod profile;
 mod shaders;
+#[cfg(feature = "kernel-checks")]
+pub(super) mod synthetic;
 use super::D;
 use anyhow::{Context, Result, ensure};
 use device::Device;
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+};
 use wgpu::{Buffer, CommandEncoder, ComputePipeline};
 
 pub(super) struct Tensor {
@@ -20,10 +32,46 @@ pub(super) struct Gpu {
     rope: Option<Buffer>,
     rows: usize,
     scratch: RefCell<Vec<Buffer>>,
+    fp16_projections: bool,
+    gemm_tile: [u32; 2],
+    packed_inputs: bool,
+    packed_cache: RefCell<Vec<(Buffer, Buffer)>>,
+    mlp_tile: Option<[u32; 2]>,
+    tiled_attention: bool,
+    cooperative_norm: bool,
+    small_tile: Option<[u32; 2]>,
+    attention_block: usize,
+    reuse_scratch: bool,
+    scratch_pool: RefCell<Vec<Buffer>>,
+    allocation_count: Cell<usize>,
+    dispatch_count: Cell<usize>,
+    #[cfg(feature = "kernel-checks")]
+    int8: Option<int8::State>,
+    #[cfg(feature = "kernel-checks")]
+    reuse_weight_buffers: bool,
+    #[cfg(feature = "kernel-checks")]
+    weight_buffers: RefCell<Vec<Buffer>>,
+    #[cfg(feature = "kernel-checks")]
+    q4: Option<q4::Mode>,
+    #[cfg(feature = "kernel-checks")]
+    q4_expansion: Option<Buffer>,
 }
 impl Gpu {
     pub async fn new() -> Result<Self> {
-        let device = Device::new().await?;
+        Self::with_precision(false).await
+    }
+    pub(super) async fn with_precision(fp16_projections: bool) -> Result<Self> {
+        Self::with_options(fp16_projections, false).await
+    }
+    pub(super) async fn with_options(fp16_projections: bool, profile: bool) -> Result<Self> {
+        let mut features = wgpu::Features::empty();
+        if fp16_projections {
+            features |= wgpu::Features::SHADER_F16;
+        }
+        if profile {
+            features |= wgpu::Features::TIMESTAMP_QUERY;
+        }
+        let device = Device::with_features(features).await?;
         let scope = device
             .device
             .push_error_scope(wgpu::ErrorFilter::Validation);
@@ -78,7 +126,11 @@ impl Gpu {
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some(name),
-                    source: wgpu::ShaderSource::Wgsl(shaders::source(body).into()),
+                    source: wgpu::ShaderSource::Wgsl(if name == "gemm" && fp16_projections {
+                        shaders::fp16_gemm().into()
+                    } else {
+                        shaders::source(body).into()
+                    }),
                 });
             pipelines.insert(
                 name,
@@ -106,23 +158,73 @@ impl Gpu {
             rope: None,
             rows: 0,
             scratch: RefCell::new(Vec::new()),
+            fp16_projections,
+            gemm_tile: [32, 32],
+            packed_inputs: false,
+            packed_cache: RefCell::new(Vec::new()),
+            mlp_tile: None,
+            tiled_attention: false,
+            cooperative_norm: false,
+            small_tile: None,
+            attention_block: 16,
+            reuse_scratch: false,
+            scratch_pool: RefCell::new(Vec::new()),
+            allocation_count: Cell::new(0),
+            dispatch_count: Cell::new(0),
+            #[cfg(feature = "kernel-checks")]
+            int8: None,
+            #[cfg(feature = "kernel-checks")]
+            reuse_weight_buffers: false,
+            #[cfg(feature = "kernel-checks")]
+            weight_buffers: RefCell::new(Vec::new()),
+            #[cfg(feature = "kernel-checks")]
+            q4: None,
+            #[cfg(feature = "kernel-checks")]
+            q4_expansion: None,
         })
     }
     pub fn info(&self) -> serde_json::Value {
         let info = &self.device.info;
+        let projection_precision = if self.fp16_projections {
+            "fp16-storage-f16-tile-f32-outer"
+        } else {
+            "bf16-storage-f32-compute"
+        };
+        #[cfg(feature = "kernel-checks")]
+        let projection_precision = match &self.int8 {
+            Some(state) if state.pure && state.float_partials => {
+                "w8a8-exact-fp32-partials-int32-outer-no-fp16"
+            }
+            Some(state) if state.float_partials => "hybrid-w8a8-exact-fp32-partials-and-fp16",
+            Some(state) if state.pure => "w8a8-all-decoder-projections-no-fp16-fallback",
+            Some(state) if state.fp16_mlp => {
+                "hybrid-w8a8-projections-fp16-mlp-gate-up-and-small-fallback"
+            }
+            Some(_) => "w8a8-unsigned-int32-row-scales-with-fp16-small-fallback",
+            None => projection_precision,
+        };
         serde_json::json!({"name":info.name,"vendor":info.vendor,"device":info.device,
             "device_type":format!("{:?}",info.device_type),"driver":info.driver,
             "backend":format!("{:?}",info.backend),"max_storage_buffer_bytes":self.device.device.limits().max_storage_buffer_binding_size,
             "weight_residency":"one-layer","decoder":"webgpu","readout":"wasm-f32",
+            "projection_precision":projection_precision,
+            "attention_query_block":self.attention_block,"reuse_scratch":self.reuse_scratch,
+            "gemm_tile":self.gemm_tile,"packed_projection_inputs":self.packed_inputs,
+            "fused_mlp_tile":self.mlp_tile,"small_row_tile":self.small_tile,
+            "tiled_attention":self.tiled_attention,"cooperative_norm":self.cooperative_norm,"batched_compute_passes":self.device.batch_passes.get(),
             "timing":"wall-clock, synchronized per layer; not GPU timestamps"})
     }
     pub fn discard_scratch(&self) {
+        self.packed_cache.borrow_mut().clear();
         for b in self.scratch.borrow_mut().drain(..) {
             b.destroy();
         }
     }
     pub fn reset(&mut self) {
         self.discard_scratch();
+        for b in self.scratch_pool.borrow_mut().drain(..) {
+            b.destroy();
+        }
         if let Some(b) = self.hidden.take() {
             b.destroy();
         }
@@ -132,10 +234,26 @@ impl Gpu {
         self.rows = 0;
     }
     pub fn upload(&self, bytes: &[u8], shape: Vec<usize>) -> Result<Tensor> {
-        Ok(Tensor {
-            shape,
-            buffer: self.device.bytes(bytes, "BF16 weight")?,
-        })
+        #[cfg(not(feature = "kernel-checks"))]
+        let buffer = self.device.bytes(bytes, "BF16 weight")?;
+        #[cfg(feature = "kernel-checks")]
+        let buffer = if let Some(buffer) = self.reused_weight_buffer(bytes.len()) {
+            self.device.queue.write_buffer(&buffer, 0, bytes);
+            buffer
+        } else {
+            self.device.bytes(bytes, "BF16 weight")?
+        };
+        #[cfg(feature = "kernel-checks")]
+        let buffer = if self.fp16_projections && shape.len() == 2 {
+            let converted = self.checkpoint_fp16(&buffer, bytes.len())?;
+            if self.reuse_weight_buffers {
+                self.retain_weight_buffer(buffer);
+            }
+            converted
+        } else {
+            buffer
+        };
+        Ok(Tensor { shape, buffer })
     }
     pub fn begin(&mut self, embeddings: &[f32]) -> Result<()> {
         ensure!(
@@ -156,9 +274,28 @@ impl Gpu {
         Ok(())
     }
     fn empty(&self, count: usize) -> Result<Buffer> {
+        if self.reuse_scratch {
+            let mut pool = self.scratch_pool.borrow_mut();
+            if let Some(index) = pool.iter().position(|b| b.size() == count as u64 * 4) {
+                let buffer = pool.swap_remove(index);
+                self.scratch.borrow_mut().push(buffer.clone());
+                return Ok(buffer);
+            }
+        }
         let buffer = self.device.empty(count, "Pplx activation")?;
+        self.allocation_count.set(self.allocation_count.get() + 1);
         self.scratch.borrow_mut().push(buffer.clone());
         Ok(buffer)
+    }
+    fn release_scratch(&self, buffer: Buffer) {
+        if self.reuse_scratch {
+            let mut pool = self.scratch_pool.borrow_mut();
+            if pool.iter().map(Buffer::size).sum::<u64>() + buffer.size() <= 512 * 1024 * 1024 {
+                pool.push(buffer);
+                return;
+            }
+        }
+        buffer.destroy();
     }
     fn run(
         &self,
@@ -168,12 +305,81 @@ impl Gpu {
         values: &[usize],
         count: usize,
     ) -> Result<()> {
+        let mut buffers = buffers;
+        let packed;
+        if self.packed_inputs && (name == "gemm" || name == "mlp_fused") {
+            let input = buffers[0];
+            let existing = self
+                .packed_cache
+                .borrow()
+                .iter()
+                .find(|(source, _)| source == input)
+                .map(|(_, b)| b.clone());
+            packed = if let Some(buffer) = existing {
+                buffer
+            } else {
+                let count = values[0]
+                    .checked_mul(values[2])
+                    .context("packed input size overflow")?;
+                let buffer = self.empty(count.div_ceil(2))?;
+                self.run(
+                    e,
+                    "pack_input",
+                    [input, &self.dummy, &self.dummy, &buffer],
+                    &[count],
+                    count,
+                )?;
+                self.packed_cache
+                    .borrow_mut()
+                    .push((input.clone(), buffer.clone()));
+                buffer
+            };
+            buffers[0] = &packed;
+        }
+        let small = self
+            .small_tile
+            .filter(|_| values.first().is_some_and(|&rows| rows <= 8));
+        let name = match (name, small) {
+            ("gemm", Some(_)) => "gemm_small",
+            ("mlp_fused", Some(_)) => "mlp_small",
+            _ => name,
+        };
+        self.dispatch_count.set(self.dispatch_count.get() + 1);
         let mut params = [0u32; 16];
         for (p, &v) in params.iter_mut().zip(values) {
             *p = u32::try_from(v)?;
         }
-        let groups = if name == "gemm" {
-            [params[1].div_ceil(32), params[0].div_ceil(32), 1]
+        let int8_tile = [64, 64];
+        #[cfg(feature = "kernel-checks")]
+        let int8_tile = self.int8.as_ref().map_or(int8_tile, |s| s.tile);
+        let groups = if name == "int8_input" || name == "int8_weight" || name == "q4_weight" {
+            [params[0], 1, 1]
+        } else if name == "int8_gemm" || name == "int8_raw" {
+            [
+                params[1].div_ceil(int8_tile[1]),
+                params[0].div_ceil(int8_tile[0]),
+                1,
+            ]
+        } else if name == "int8_mlp" {
+            [params[1].div_ceil(64), params[0].div_ceil(64), 1]
+        } else if self.cooperative_norm && name == "norm" {
+            [params[0], 1, 1]
+        } else if self.tiled_attention && name == "scores" {
+            [params[0].div_ceil(16), params[1].div_ceil(16), 16]
+        } else if self.tiled_attention && name == "values" {
+            [8, params[1].div_ceil(16), 16]
+        } else if name == "gemm_small" || name == "mlp_small" {
+            let tile = small.unwrap();
+            [params[1].div_ceil(tile[1]), params[0].div_ceil(tile[0]), 1]
+        } else if name == "mlp_fused" {
+            let tile = self.mlp_tile.context("fused MLP not configured")?;
+            [params[1].div_ceil(tile[1]), params[0].div_ceil(tile[0]), 1]
+        } else if name == "gemm" {
+            [
+                params[1].div_ceil(self.gemm_tile[1]),
+                params[0].div_ceil(self.gemm_tile[0]),
+                1,
+            ]
         } else {
             let groups = u32::try_from(count)?.div_ceil(64);
             let width = groups.min(
@@ -186,7 +392,7 @@ impl Gpu {
             [width, groups.div_ceil(width), 1]
         };
         self.device
-            .dispatch(e, &self.pipelines[name], &buffers, &params, groups)
+            .dispatch(e, name, &self.pipelines[name], &buffers, &params, groups)
     }
     fn linear(
         &self,
@@ -198,6 +404,33 @@ impl Gpu {
         output: usize,
     ) -> Result<Buffer> {
         let y = self.empty(n * output)?;
+        #[cfg(feature = "kernel-checks")]
+        if let Some(weight) = self
+            .int8
+            .as_ref()
+            .filter(|state| n > 8 || state.pure)
+            .and_then(|state| state.weight(w))
+        {
+            let weight = if self.q4 == Some(q4::Mode::Buffered) {
+                self.expand_q4(e, &weight, output, input)?
+            } else {
+                weight
+            };
+            let input_buffer = self.int8_input(e, x, n, input)?;
+            self.run(
+                e,
+                "int8_gemm",
+                [&input_buffer, &weight, &self.dummy, &y],
+                &[n, output, input],
+                0,
+            )?;
+            return Ok(y);
+        }
+        #[cfg(feature = "kernel-checks")]
+        ensure!(
+            !self.int8.as_ref().is_some_and(|s| s.pure),
+            "pure INT8 projection is missing quantized weights"
+        );
         self.run(e, "gemm", [x, w, &self.dummy, &y], &[n, output, input], 0)?;
         Ok(y)
     }
@@ -241,6 +474,7 @@ impl Gpu {
             index < 32 && (markers.is_none() || index == 31),
             "invalid GPU layer/pruning"
         );
+        self.packed_cache.borrow_mut().clear();
         let n = self.rows;
         if let Some(m) = markers {
             ensure!(
@@ -322,10 +556,15 @@ impl Gpu {
                 n * 4,
             )?;
             let context = self.empty(nq * 4096)?;
-            let scores = self.empty(n * 16 * 16)?;
-            let probabilities = self.empty(n * 16 * 16)?;
-            for start in (0..nq).step_by(16) {
-                let rows = (nq - start).min(16);
+            let block = if self.attention_block == 16 {
+                16
+            } else {
+                self.attention_block.min(nq)
+            };
+            let scores = self.empty(n * block * 16)?;
+            let probabilities = self.empty(n * block * 16)?;
+            for start in (0..nq).step_by(block) {
+                let rows = (nq - start).min(block);
                 self.run(
                     &mut e,
                     "scores",
@@ -476,23 +715,72 @@ impl Gpu {
             get("post_attention_layernorm.weight", &[D])?,
             nq,
         )?;
-        let gate = self.linear(
-            &mut e,
-            &norm,
-            get("mlp.gate_proj.weight", &[9216, D])?,
-            nq,
-            D,
-            9216,
-        )?;
-        let up = self.linear(
-            &mut e,
-            &norm,
-            get("mlp.up_proj.weight", &[9216, D])?,
-            nq,
-            D,
-            9216,
-        )?;
-        let activated = self.point(&mut e, &gate, &up, nq * 9216, 1)?;
+        #[cfg(feature = "kernel-checks")]
+        let int8_mlp = self
+            .int8
+            .as_ref()
+            .filter(|state| (nq > 8 || state.pure) && !state.fp16_mlp);
+        #[cfg(not(feature = "kernel-checks"))]
+        let int8_mlp: Option<()> = None;
+        #[cfg(feature = "kernel-checks")]
+        let mut quantized_activated = None;
+        #[cfg(not(feature = "kernel-checks"))]
+        let quantized_activated: Option<Buffer> = None;
+        #[cfg(feature = "kernel-checks")]
+        if let Some(state) = int8_mlp.filter(|state| state.fused) {
+            let gate = state
+                .weight(get("mlp.gate_proj.weight", &[9216, D])?)
+                .context("missing INT8 gate")?;
+            let up = state
+                .weight(get("mlp.up_proj.weight", &[9216, D])?)
+                .context("missing INT8 up")?;
+            let input = self.int8_input(&mut e, &norm, nq, D)?;
+            let output = self.empty(nq * 9216)?;
+            self.run(
+                &mut e,
+                "int8_mlp",
+                [&input, &gate, &up, &output],
+                &[nq, 9216, D],
+                0,
+            )?;
+            quantized_activated = Some(output);
+        }
+        let activated = if let Some(output) = quantized_activated {
+            output
+        } else if self.mlp_tile.is_some() && int8_mlp.is_none() {
+            let output = self.empty(nq * 9216)?;
+            self.run(
+                &mut e,
+                "mlp_fused",
+                [
+                    &norm,
+                    get("mlp.gate_proj.weight", &[9216, D])?,
+                    get("mlp.up_proj.weight", &[9216, D])?,
+                    &output,
+                ],
+                &[nq, 9216, D],
+                0,
+            )?;
+            output
+        } else {
+            let gate = self.linear(
+                &mut e,
+                &norm,
+                get("mlp.gate_proj.weight", &[9216, D])?,
+                nq,
+                D,
+                9216,
+            )?;
+            let up = self.linear(
+                &mut e,
+                &norm,
+                get("mlp.up_proj.weight", &[9216, D])?,
+                nq,
+                D,
+                9216,
+            )?;
+            self.point(&mut e, &gate, &up, nq * 9216, 1)?
+        };
         let down = self.linear(
             &mut e,
             &activated,
@@ -504,13 +792,14 @@ impl Gpu {
         let output = self.point(&mut e, &residual, &down, nq * D, 0)?;
         // A four-byte fence bounds in-flight weights to one layer without reading activations back.
         self.device.read(e, &output, 1).await?;
+        self.packed_cache.borrow_mut().clear();
         for b in self.scratch.borrow_mut().drain(..) {
             if b != output {
-                b.destroy();
+                self.release_scratch(b);
             }
         }
         if let Some(old) = self.hidden.take() {
-            old.destroy();
+            self.release_scratch(old);
         }
         self.hidden = Some(output);
         self.rows = nq;

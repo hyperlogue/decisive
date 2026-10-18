@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Perplexity Flash · Quantization experiment</title>
+<style>
+  :root { color-scheme: light; font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #18372f; background: #f3f6f4; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 40px 24px; }
+  main { max-width: 1040px; margin: auto; }
+  .eyebrow { color: #536c62; font-size: 12px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; }
+  h1 { font-size: clamp(27px, 4vw, 38px); line-height: 1.15; letter-spacing: -.03em; margin: 16px 0; }
+  .intro { color: #536c62; max-width: 700px; margin-bottom: 28px; }
+  .panel { padding: 26px; border: 1px solid #dce5df; border-radius: 14px; background: white; margin: 20px 0; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; }
+  button { font: inherit; font-weight: 600; font-size: 14px; padding: 11px 17px; min-height: 44px; border-radius: 7px; background: white; border: 1px solid #cddad2; color: #25493b; cursor: pointer; }
+  #run { background: #146352; border-color: #146352; color: white; }
+  button:hover:not(:disabled) { filter: brightness(.94); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, summary:focus-visible { outline: 3px solid #6fa99a; outline-offset: 3px; }
+  h2 { font-size: 18px; margin: 0 0 8px; }
+  #status { color: #536c62; margin: 0; overflow-wrap: anywhere; }
+  .note { font-size: 13px; color: #60746a; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { text-align: right; padding: 10px; border-bottom: 1px solid #e8eeea; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  th { font-size: 12px; font-weight: 500; color: #536c62; }
+  td:first-child, th:first-child { text-align: left; padding-left: 0; }
+  #decision { padding: 14px 18px; background: #eef5f1; border-radius: 8px; margin-bottom: 20px; }
+  details { margin-top: 20px; }
+  summary { font-size: 13px; cursor: pointer; color: #536c62; }
+  pre { max-height: 320px; overflow: auto; font-size: 11px; background: #f3f6f4; padding: 16px; border-radius: 8px; }
+  footer { font-size: 12px; color: #60746a; }
+  [hidden] { display: none !important; }
+  @media (max-width: 560px) { body { padding: 24px 14px; } .panel { padding: 18px; } h1 { font-size: 29px; } }
+</style>
+<main>
+  <div class="eyebrow">Decisive / Prefill experiment 03</div>
+  <h1>Compare prefill compute precision</h1>
+  <p class="intro">Compare BF16, Q8 and Q4 weights with FP32 and FP16 arithmetic, plus weights preconverted to native FP16 storage. Resident GPU compute time is the primary metric. The benchmark uses Perplexity Flash’s actual MLP matrix sizes with synthetic weights.</p>
+  <section class="panel">
+    <div class="controls">
+      <button id="run">Run comparison</button>
+      <button id="stop" disabled>Stop</button>
+      <button id="download" disabled>Download report</button>
+    </div>
+    <p class="note">No model download. Keep this tab visible and other GPU workloads idle. This test can take a few minutes. Results stay on this computer.</p>
+    <h2 id="title">Ready to compare</h2>
+    <p id="status" role="status" aria-live="polite">117, 229, 1024 and 2048 tokens · 3 warmups + 11 measured rounds · resident weights and fresh uploads</p>
+  </section>
+  <section id="results" class="panel" hidden>
+    <h2>Measured results</h2>
+    <p id="decision" hidden></p>
+    <div class="table-wrap">
+      <table><thead><tr><th scope="col">Matrix</th><th scope="col">Tokens</th><th scope="col">Weights / arithmetic</th><th scope="col">GPU compute</th><th scope="col">TFLOP/s</th><th scope="col">Upload + compute</th><th scope="col">Compute speedup</th><th scope="col">Synthetic drift</th></tr></thead><tbody id="rows"></tbody></table>
+    </div>
+    <p class="note">Median time in ms; compute uses GPU timestamps. Speedup is relative to BF16 storage / FP32 arithmetic. Drift is relative L2 output error on synthetic data, not task accuracy. The report includes every sample, Q4/Q8 comparisons, and FP16 preconversion speed and output differences.</p>
+    <details><summary>Full report</summary><pre id="report"></pre></details>
+  </section>
+  <footer>BF16 is a storage format here, not native BF16 arithmetic. Q8/Q4 use groups of 64 and FP32 scales.<br>The FP16 path uses native FP16 multiply-adds over 32-element tiles and FP32 sums across tiles. Full-model quality and latency remain untested.</footer>
+  <noscript>Enable JavaScript to run this comparison.</noscript>
+</main>
+<script id="probe">
+const KERNEL_SOURCE = __KERNEL_JSON__;
+const PROVENANCE = __PROVENANCE_JSON__;
+/*__PROBE_JS__*/
+if (typeof document === 'undefined') {
+  self.onmessage = async () => {
+    try {
+      const report = await PplxQuantizationProbe.run(KERNEL_SOURCE, PROVENANCE, data => self.postMessage({type: 'progress', ...data}));
+      self.postMessage({type: 'result', report});
+    } catch (error) { self.postMessage({type: 'error', error: String(error)}); }
+  };
+  self.postMessage({type: 'ready'});
+} else {
+  const $ = selector => document.querySelector(selector);
+  const query = new URLSearchParams(location.search);
+  let worker, url, timer, report;
+  const cleanup = () => {
+    clearTimeout(timer); worker?.terminate(); worker = null;
+    if (url) URL.revokeObjectURL(url); url = null;
+    $('#run').disabled = false; $('#stop').disabled = true;
+  };
+  const save = () => {
+    $('#results').hidden = false;
+    $('#download').disabled = false;
+    $('#report').textContent = JSON.stringify(report, null, 2);
+    window.result = report;
+    const endpoint = query.get('report');
+    if (endpoint) {
+      const local = location.hostname === '127.0.0.1' || location.hostname === 'localhost';
+      if (!local || !/^\/results\/[a-f0-9]{32}$/.test(endpoint)) {
+        $('#status').textContent += ' Automatic collection requires the local benchmark server.';
+      } else {
+        fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(report)})
+          .then(response => { if (!response.ok) throw Error(`HTTP ${response.status}`); $('#status').textContent += ' Report saved automatically.'; })
+          .catch(error => { $('#status').textContent += ` Automatic save failed: ${error}. Use Download report.`; });
+      }
+    }
+  };
+  const fail = message => {
+    report.error = message; report.completed = false;
+    $('#title').textContent = 'Comparison stopped'; $('#status').textContent = message;
+    cleanup(); save();
+  };
+  const addRecord = record => {
+    $('#results').hidden = false;
+    for (const v of record.variants) {
+      const row = document.createElement('tr');
+      const cells = [record.name, record.rows, v.name, v.gpu_ms?.resident.median_ms.toFixed(2) ?? 'unavailable', v.effective_tflops?.toFixed(3) ?? '—', v.streamed.median_ms.toFixed(2),
+        v.id === 'bf16-f32' ? 'baseline' : v.speedup.compute ? `${v.speedup.compute.ratio.toFixed(2)}×` : 'unavailable', `${(v.synthetic_drift_from_bf16.relative_l2 * 100).toFixed(2)}%`];
+      for (const value of cells) { const td = document.createElement('td'); td.textContent = value; row.append(td); }
+      $('#rows').append(row);
+    }
+  };
+  $('#run').addEventListener('click', () => {
+    report = {experiment: 'pplx-weight-only-quantization-v1', completed: false, browser: navigator.userAgent,
+      protocol: location.protocol, cases: [], page_hidden_during_run: document.hidden,
+      visibility_events: [{elapsed_ms: 0, hidden: document.hidden}], page_started_ms: performance.now()};
+    $('#rows').replaceChildren(); $('#results').hidden = true; $('#decision').hidden = true; $('#download').disabled = true;
+    $('#run').disabled = true; $('#stop').disabled = false;
+    $('#title').textContent = 'Running comparison'; $('#status').textContent = 'Starting the benchmark worker…';
+    try {
+      url = URL.createObjectURL(new Blob([$('#probe').textContent], {type: 'text/javascript'}));
+      worker = new Worker(url);
+      timer = setTimeout(() => fail('Worker startup timed out. Download the report and share it.'), 10000);
+      worker.onmessage = ({data}) => {
+        if (data.type === 'ready') {
+          clearTimeout(timer);
+          timer = setTimeout(() => fail('Benchmark exceeded 15 minutes. Download the partial report.'), 900000);
+          worker.postMessage({run: true});
+        } else if (data.type === 'progress') {
+          $('#status').textContent = data.message;
+          if (data.record) { report.cases.push(data.record); addRecord(data.record); }
+        } else if (data.type === 'result') {
+          report = {...report, ...data.report};
+          if (report.page_hidden_during_run && report.summary) report.summary.visibility_warning = 'Page was hidden; rerun visibly before accepting speed results';
+          $('#title').textContent = report.completed ? 'Comparison complete' : 'Comparison failed';
+          $('#status').textContent = report.error || 'Download the report so we can choose the least aggressive scheme from these measurements.';
+          if (report.summary) {
+            const selected = report.summary.scopes.filter(s => s.prefill_candidate !== null);
+            $('#decision').textContent = report.page_hidden_during_run ? 'The page was hidden during the run. Repeat with the tab visible before choosing a scheme.' : selected.length ?
+              selected.map(s => `${s.name}: ${s.prefill_candidate} passed the prefill compute gate.`).join(' ') + ' Model accuracy remains untested.' :
+              'No candidate passed every compute and stability gate. Inspect the per-shape timings before choosing a precision.';
+            $('#decision').hidden = false;
+          }
+          cleanup(); save();
+        } else if (data.type === 'error') fail(data.error);
+      };
+      worker.onerror = event => fail(event.message || 'Classic worker failed to start or run.');
+      worker.onmessageerror = () => fail('Worker report could not be read.');
+    } catch (error) { fail(String(error)); }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (worker) {
+      report.visibility_events.push({elapsed_ms: performance.now() - report.page_started_ms, hidden: document.hidden});
+      if (document.hidden) report.page_hidden_during_run = true;
+    }
+  });
+  $('#stop').addEventListener('click', () => fail('Stopped by user. Partial measurements are retained.'));
+  $('#download').addEventListener('click', () => {
+    const link = document.createElement('a');
+    const blob = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2) + '\n'], {type: 'application/json'}));
+    link.href = blob; link.download = 'pplx-quantization-report.json'; link.click();
+    setTimeout(() => URL.revokeObjectURL(blob), 1000);
+  });
+  if (query.get('autorun') === '1') {
+    const startVisible = () => {
+      if (!document.hidden) { document.removeEventListener('visibilitychange', startVisible); $('#run').click(); }
+    };
+    $('#status').textContent = 'Waiting for this tab to become visible…';
+    document.addEventListener('visibilitychange', startVisible);
+    startVisible();
+  }
+}
+</script>
+</html>

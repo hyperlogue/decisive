@@ -1,8 +1,3 @@
-"""Offline weight-quantization sensitivity experiment, not an inference backend.
-
-Reconstructs grouped affine low-bit weights and runs the FP32 publisher oracle.
-This measures output sensitivity only, never GPU performance or FP16 arithmetic.
-"""
 import argparse
 import importlib.metadata
 import json
@@ -28,6 +23,25 @@ def reconstruct(weight, bits, group):
     return (codes * scale.half().float() + lo.half().float()).reshape(weight.shape)
 
 
+def reconstruct_symmetric(weight, bits, group):
+    assert weight.ndim == 2 and weight.shape[1] % group == 0
+    blocks = weight.reshape(-1, group)
+    limit = (1 << (bits - 1)) - 1
+    scale = blocks.abs().amax(-1, keepdim=True) / limit
+    codes = (blocks / scale.clamp_min(torch.finfo(torch.float32).tiny)).round().clamp(-limit, limit)
+    return (codes * scale).reshape(weight.shape)
+
+
+def precision(variant, key):
+    if variant == 'bf16':
+        return 16
+    if variant == 'q8_mlp_bf16_other':
+        return 8 if key.startswith('mlp.') else 16
+    if variant == 'q4_mlp_q8_other':
+        return 4 if key.startswith('mlp.') else 8
+    return int(variant[-1])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', type=Path, default=Path('models/pplx-decider-flash-v1.2'))
@@ -36,6 +50,9 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--group', type=int, default=64, choices=[32, 64, 128])
     parser.add_argument('--threads', type=int, default=3)
+    parser.add_argument('--variants', nargs='+', choices=['bf16', 'q8_mlp_bf16_other', 'q4', 'q3', 'q2', 'q4_mlp_q8_other'],
+                        default=['q8_mlp_bf16_other', 'q4', 'q3', 'q2', 'q4_mlp_q8_other'],
+                        help='BF16 is always included as the reference')
     a = parser.parse_args()
     torch.set_num_threads(a.threads)
     torch.set_num_interop_threads(1)
@@ -65,7 +82,7 @@ def main():
     config._attn_implementation = 'eager'
     files = [safe_open(a.model / f'model-0000{i}-of-00002.safetensors', framework='pt') for i in (1, 2)]
     lookup = {key: f for f in files for key in f.keys()}
-    variants = ['bf16', 'q4', 'q3', 'q2', 'q4_mlp_q8_other']
+    variants = list(dict.fromkeys(['bf16', *a.variants]))
     states = {}
     positions = []
     rotary = Qwen3_5TextRotaryEmbedding(config)
@@ -77,7 +94,7 @@ def main():
             'language_model.embed_tokens.weight')[item.input_ids].float().unsqueeze(0) for item in encoded]
     pe = [rotary(x, p) for x, p in zip(states['bf16'], positions)]
     sizes = {name: 0 for name in variants}
-    quantized_names = []
+    quantized_names = {name: [] for name in variants}
     for i in range(config.num_hidden_layers):
         prefix = f'language_model.layers.{i}.'
         original = {k[len(prefix):]: lookup[k].get_tensor(k).float() for k in lookup if k.startswith(prefix)}
@@ -86,16 +103,16 @@ def main():
                 layer = Qwen3_5DecoderLayer(config, i)
             state = {}
             for key, weight in original.items():
-                bits = 16 if name == 'bf16' else (4 if 'mlp' in key else 8) if name == 'q4_mlp_q8_other' else int(name[-1])
+                bits = precision(name, key)
                 quantized = bits < 16 and weight.ndim == 2 and key.endswith('.weight')
                 if quantized:
-                    state[key] = reconstruct(weight, bits, a.group)
-                    # One output row at a time, packed into u32 words; FP16 scale and offset.
+                    fn = reconstruct_symmetric if name == 'q8_mlp_bf16_other' else reconstruct
+                    state[key] = fn(weight, bits, a.group)
+
                     per_word = 32 // bits
                     sizes[name] += weight.shape[0] * ((weight.shape[1] + per_word - 1) // per_word) * 4
                     sizes[name] += weight.numel() // a.group * 4
-                    if name == 'q4':
-                        quantized_names.append(prefix + key)
+                    quantized_names[name].append(prefix + key)
                 else:
                     state[key] = weight
                     sizes[name] += weight.numel() * 2
@@ -114,8 +131,8 @@ def main():
         'repository': 'perplexity-ai/pplx-decider-flash-v1.2',
         'revision': '6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d',
         'torch': torch.__version__, 'transformers': importlib.metadata.version('transformers'),
-        'method': 'affine min-max round-to-nearest, per output row/input group; FP16 scale and offset; FP32 dequantization and computation',
-        'group_size': a.group, 'scope': 'all decoder 2D linear weights; mixed variant uses Q4 MLP and Q8 other projections; embeddings, conv, norm, readout unchanged',
+        'method': 'q8_mlp_bf16_other: symmetric max-absolute, FP32 scale, nearest ties-to-even; other quantized variants: affine min-max, FP16 scale and offset; all use FP32 dequantization and computation',
+        'group_size': a.group, 'scope': 'q8_mlp_bf16_other changes only MLP 2D weights; q4_mlp_q8_other uses Q4 MLP/Q8 other projections; other variants quantize all decoder 2D linear weights; embeddings, conv, norm, readout unchanged',
         'limitation': 'small synthetic sensitivity probe; not task-quality approval, not WebGPU, no activation quantization, no calibrated AWQ/GPTQ',
         'decoder_storage_bytes': sizes, 'quantized_tensors': quantized_names,
         'cases': [],

@@ -19,6 +19,10 @@ fn rounded(values: &[f32]) -> Vec<f32> {
 }
 fn compare(actual: &[f32], expected: &[f32], name: &str) -> Result<Value> {
     ensure!(actual.len() == expected.len(), "{name}: shape mismatch");
+    ensure!(
+        !actual.is_empty() && actual.iter().chain(expected).all(|v| v.is_finite()),
+        "{name}: empty or non-finite values"
+    );
     let error = actual
         .iter()
         .zip(expected)
@@ -31,7 +35,7 @@ pub async fn run() -> Result<Value> {
     let gpu = Gpu::new().await?;
     let d = &gpu.device;
     let mut checks = Vec::new();
-    for (m, k, n) in [(1, 18, 34), (17, 30, 18)] {
+    for (m, k, n) in [(1, 18, 34), (17, 30, 18), (33, 66, 34)] {
         let x = values(m * k, 1);
         let w = rounded(&values(n * k, 2));
         let xb = d.buffer(&x, "check input")?;
@@ -49,6 +53,76 @@ pub async fn run() -> Result<Value> {
         }
         checks.push(compare(&actual, &expected, "BF16 GEMM edge tiles")?);
     }
+    let n = 3;
+    let x = values(n * D, 16);
+    let weight = rounded(&values(D, 17));
+    let xb = d.buffer(&x, "RMS input")?;
+    let wb = d.bytes(&bf16(&weight), "RMS weight")?;
+    let mut e = d.encoder();
+    let out = gpu.norm(&mut e, &xb, &wb, n)?;
+    let actual = d.read(e, &out, n * D).await?;
+    let mut expected = x.clone();
+    for row in expected.chunks_exact_mut(D) {
+        let scale = 1. / (row.iter().map(|v| v * v).sum::<f32>() / D as f32 + 1e-6).sqrt();
+        for (v, w) in row.iter_mut().zip(&weight) {
+            *v = (*v * scale) * (1. + w);
+        }
+    }
+    checks.push(compare(&actual, &expected, "residual RMS normalization")?);
+
+    let gate = values(n * D, 18);
+    let gb = d.buffer(&gate, "MLP gate")?;
+    let mut e = d.encoder();
+    let out = gpu.point(&mut e, &xb, &gb, n * D, 1)?;
+    let actual = d.read(e, &out, n * D).await?;
+    let expected: Vec<_> = x
+        .iter()
+        .zip(&gate)
+        .map(|(x, g)| (x / (1. + (-x).exp())) * g)
+        .collect();
+    checks.push(compare(&actual, &expected, "MLP SiLU product")?);
+
+    let decay = rounded(&values(32, 19));
+    let dt = rounded(&values(32, 20));
+    let db = d.bytes(&bf16(&decay), "BF16 log decay")?;
+    let tb = d.bytes(&bf16(&dt), "BF16 dt bias")?;
+    let out = gpu.empty(64)?;
+    let mut e = d.encoder();
+    gpu.run(
+        &mut e,
+        "delta_constants",
+        [&gpu.dummy, &db, &tb, &out],
+        &[],
+        32,
+    )?;
+    let actual = d.read(e, &out, 64).await?;
+    let expected: Vec<_> = decay
+        .iter()
+        .map(|v| v.exp())
+        .chain(dt.iter().copied())
+        .collect();
+    checks.push(compare(&actual, &expected, "BF16 delta constants")?);
+
+    let x = values(n * 4096, 21);
+    let gate = values(n * 4096, 22);
+    let weight = rounded(&values(128, 23));
+    let xb = d.buffer(&x, "delta output")?;
+    let gb = d.buffer(&gate, "delta gate")?;
+    let wb = d.bytes(&bf16(&weight), "delta RMS weight")?;
+    let out = gpu.empty(n * 4096)?;
+    let mut e = d.encoder();
+    gpu.run(&mut e, "delta_gate", [&xb, &wb, &gb, &out], &[n], n * 32)?;
+    let actual = d.read(e, &out, n * 4096).await?;
+    let mut expected = x.clone();
+    for (h, row) in expected.chunks_exact_mut(128).enumerate() {
+        let scale = 1. / (row.iter().map(|v| v * v).sum::<f32>() / 128. + 1e-6).sqrt();
+        for (i, v) in row.iter_mut().enumerate() {
+            let z = gate[h * 128 + i];
+            *v = ((*v * scale) * weight[i]) * (z / (1. + (-z).exp()));
+        }
+    }
+    checks.push(compare(&actual, &expected, "delta RMS SiLU gate")?);
+    gpu.discard_scratch();
     for n in [1, 3, 17] {
         let raw = values(n * 8192, 3);
         let weight = rounded(&values(8192 * 4, 4));

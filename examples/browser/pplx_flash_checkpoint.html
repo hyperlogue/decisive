@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Perplexity Flash · Checkpoint comparisons</title>
+<style>body{font:16px/1.6 system-ui;max-width:1000px;margin:40px auto;padding:0 24px;color:#18372f;background:#f3f6f4}button{font:inherit;padding:10px 18px}pre{white-space:pre-wrap;max-height:400px;overflow:auto}td,th{padding:10px;text-align:right}td:first-child,th:first-child{text-align:left}</style>
+<h1>Checkpoint comparisons</h1><p>Run the published weights through all 32 decoder layers. Prepare and retain weights before timing warm requests. Request timings include tokenization, activation quantization, inference and readout. Keep this page visible.</p>
+<button id="run">Run comparisons</button> <button id="stop" disabled>Stop</button><p id="status">Ready</p>
+<table><thead><tr><th>Phase / input</th><th>Baseline</th><th>Candidate</th><th>Speedup</th></tr></thead><tbody id="rows"></tbody></table>
+<p>Fixture agreement and output drift do not establish broad task quality. Runs with profiling or without warmups are diagnostic; they do not establish a speedup.</p>
+<details><summary>Report</summary><pre id="report"></pre></details>
+<script>
+const PLAN=__PLAN_JSON__,$=s=>document.querySelector(s),query=new URLSearchParams(location.search);
+let worker,report,stopRequested=false,rejectPhase;
+const key='checkpoint-running:'+location.pathname;
+const post=async(kind,data)=>{const endpoint=query.get('report');if(!/^\/results\/[a-f0-9]{32}$/.test(endpoint||''))throw Error('Local collector required');const r=await fetch(kind==='result'?endpoint:endpoint.replace('/results/','/progress/'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(!r.ok)throw Error(`Collector HTTP ${r.status}`);};
+const phase=spec=>new Promise((resolve,reject)=>{
+ const events=[{epoch_ms:performance.timeOrigin+performance.now(),hidden:document.hidden}];
+ const visibility=()=>events.push({epoch_ms:performance.timeOrigin+performance.now(),hidden:document.hidden});document.addEventListener('visibilitychange',visibility);
+ const cleanup=()=>{document.removeEventListener('visibilitychange',visibility);worker?.terminate();worker=null;rejectPhase=null;clearTimeout(timer);};
+ rejectPhase=error=>{cleanup();reject(error);};const timer=setTimeout(()=>rejectPhase?.(Error('Checkpoint phase timed out')),1200000);
+ worker=new Worker('/checkpoint-worker.js',{type:'module'});
+ worker.onerror=event=>rejectPhase(Error(event.message||'Checkpoint worker failed'));
+ worker.onmessage=({data})=>{
+  if(data.type==='ready')worker.postMessage(spec);
+  else if(data.type==='progress'){$('#status').textContent=spec.id+': '+data.message;post('progress',{message:$('#status').textContent}).catch(()=>{});}
+  else if(data.type==='result'){
+   const result=data.report;result.visibility_events=events;for(const run of result.runs){run.page_hidden=events.some((e,i)=>e.hidden&&e.epoch_ms<run.finished_epoch_ms&&(events[i+1]?.epoch_ms??Infinity)>run.started_epoch_ms);}result.measured_runs_hidden=result.runs.some(r=>!r.warmup&&r.page_hidden);cleanup();resolve(result);
+  }
+ };
+});
+$('#run').onclick=async()=>{
+ if(worker)return;stopRequested=false;report={schema_version:1,experiment:'pplx-checkpoint-v1',completed:false,phases:[],browser:navigator.userAgent,started_at:new Date().toISOString()};sessionStorage.setItem(key,'running');$('#run').disabled=true;$('#stop').disabled=false;$('#rows').replaceChildren();
+ try{for(const spec of PLAN){if(stopRequested)throw Error('Stopped by user');report.active_phase=spec.id;const result=await phase(spec);report.phases.push({id:spec.id,report:result});await post('progress',{message:spec.id+': checkpoint saved',phase:{index:report.phases.length,report:result}});if(!result.completed)throw Error(result.error);for(const c of result.cases){const latencyEligible=spec.warmups>=1&&!spec.profile;const tr=document.createElement('tr');for(const value of [spec.id+' / '+c.fixture,latencyEligible?(c.variants[spec.modes[0]].median_ms/1000).toFixed(3)+' s':'diagnostic',latencyEligible&&spec.modes.length===2?(c.variants[spec.modes[1]].median_ms/1000).toFixed(3)+' s':'—',latencyEligible&&c.speedup!==null?c.speedup.toFixed(3)+'×':'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}$('#rows').append(tr);}}
+ delete report.active_phase;report.completed=true;$('#status').textContent='Checkpoint queue complete';}catch(error){report.error=String(error);$('#status').textContent=report.error;}
+ sessionStorage.removeItem(key);$('#run').disabled=false;$('#stop').disabled=true;window.result=report;$('#report').textContent=JSON.stringify(report,null,2);try{await post('result',report);}catch(error){$('#status').textContent+=' '+error;}
+};
+$('#stop').onclick=()=>{stopRequested=true;rejectPhase?.(Error('Stopped by user'));};
+if(query.get('autorun')==='1'){if(sessionStorage.getItem(key)){$('#status').textContent='The browser reloaded an unfinished run. No performance verdict; rerun explicitly.';sessionStorage.removeItem(key);}else $('#run').click();}
+</script>

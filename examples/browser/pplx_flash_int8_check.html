@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Should I use INT8? · Perplexity benchmark</title>
+<style>
+:root{font:16px/1.6 system-ui;color:#18372f;background:#f3f6f4;color-scheme:light}body{max-width:720px;margin:40px auto;padding:0 20px}h1{font-size:32px;line-height:1.2;margin-bottom:12px}h2{font-size:25px;line-height:1.3;margin:8px 0}p{margin:12px 0}.card{background:white;border:1px solid #dce5df;border-radius:14px;padding:24px;margin:24px 0}button{font:inherit;padding:12px 18px;border:1px solid #bdcfc4;border-radius:8px;background:white;color:inherit;cursor:pointer}button:disabled{opacity:.45;cursor:default}#run{background:#146352;border-color:#146352;color:white;font-weight:650}small,.muted{color:#536c62}progress{width:100%;height:12px;accent-color:#146352}#answer[data-code=faster]{border-color:#146352;border-width:2px}#answer[data-code=failed],#answer[data-code=unsupported]{border-color:#b68148}.badge{font-weight:600;color:#146352}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td,th{text-align:right;padding:10px 0;border-bottom:1px solid #e4ebe6}td:first-child,th:first-child{text-align:left}details{margin-top:24px}summary{cursor:pointer;color:#536c62}pre{overflow:auto;max-height:420px;white-space:pre-wrap;font-size:11px}[hidden]{display:none!important}@media(max-width:420px){body{margin:24px auto}.card{padding:18px}h1{font-size:28px}}
+</style>
+<h1>Should I use INT8?</h1>
+<p>One test, one answer for Perplexity Flash on this device and browser.</p>
+<div class="card">
+ <button id="run">Run the full check</button> <button id="stop" disabled>Stop</button>
+ <p id="status" role="status">Ready. No model download or setup needed.</p>
+ <progress id="progress" max="7" value="0" hidden></progress>
+ <small>Keep this page visible and the screen awake. The full check may take several minutes on a phone.</small>
+</div>
+<section id="answer" class="card" hidden aria-live="polite">
+ <span class="badge">Your result</span><h2 id="headline"></h2><p id="explanation"></p>
+ <p id="checks" class="muted"></p>
+ <table id="comparison" hidden><thead><tr><th>Tokens</th><th>INT8</th><th>FP16</th><th>Result</th></tr></thead><tbody id="rows"></tbody></table>
+ <p><button id="download">Save report</button></p>
+ <small>This checks prepacked synthetic kernels at real model dimensions. It does not validate model accuracy or include quantization costs.</small>
+</section>
+<details><summary>What runs and technical report</summary>
+ <p>Prefill matrices, weight layouts, register tiles, unsigned dots, arithmetic controls, and four-element dots. A final comparison retests the selected kernels together.</p>
+ <p>A speed win requires at least 10% improvement, 80% paired wins, and stable timings. A noisy confirmation is repeated once.</p>
+ <pre id="report">No report yet.</pre>
+</details>
+<script id="suite-library">/*__SUITE_JS__*/</script>
+<script id="probe" type="text/plain">
+const KERNEL_SOURCE=__KERNEL_JSON__;
+const PROVENANCE=__PROVENANCE_JSON__;
+/*__PROBE_JS__*/
+/*__DP4A_JS__*/
+/*__DP4A_CORE_JS__*/
+/*__DP4A_PRIMITIVE_JS__*/
+self.onmessage=async()=>{const report=await PplxDp4aSuite.run(KERNEL_SOURCE,PROVENANCE,update=>self.postMessage({type:'progress',...update}));self.postMessage({type:'result',report});};
+self.postMessage({type:'ready'});
+</script>
+<script>
+const $=s=>document.querySelector(s),query=new URLSearchParams(location.search);
+let worker,url,timer,report,started;
+const post=(kind,data)=>{
+ const endpoint=query.get('report');if(!endpoint)return;
+ if(!['127.0.0.1','localhost'].includes(location.hostname)||!/^\/results\/[a-f0-9]{32}$/.test(endpoint))throw Error('Local report collector required');
+ return fetch(kind==='result'?endpoint:endpoint.replace('/results/','/progress/'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(r=>{if(!r.ok)throw Error(`Collector HTTP ${r.status}`);});
+};
+function cleanup(){clearTimeout(timer);worker?.terminate();worker=null;if(url){URL.revokeObjectURL(url);url=null;}$('#run').disabled=false;$('#stop').disabled=true;}
+function show(){
+ report.verdict=PplxDp4aSuite.summarize(report,report.page_hidden_during_run);
+ const v=report.verdict;$('#answer').hidden=false;$('#answer').dataset.code=v.code;$('#headline').textContent=v.title;$('#explanation').textContent=v.detail;
+ $('#checks').textContent=v.correct===true?'Supported ✓   Correct kernel results ✓':'';
+ $('#comparison').hidden=!v.comparisons;$('#rows').replaceChildren();
+ for(const c of v.comparisons??[]){const row=document.createElement('tr');for(const text of [c.tokens.toLocaleString(),`${c.int8_ms.toFixed(2)} ms`,`${c.fp16_ms.toFixed(2)} ms`,c.noisy?'Noisy':c.int8_faster?'INT8 faster':c.fp16_faster?'FP16 faster':'No clear win']){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}$('#rows').append(row);}
+ $('#status').textContent=report.completed?'Check complete.':v.title;$('#report').textContent=JSON.stringify(report,null,2);window.result=report;
+ post('result',report)?.catch(e=>{$('#status').textContent+=` ${e}`;});
+}
+function fail(error){report.completed=false;report.error=String(error);report.elapsed_ms=performance.now()-started;cleanup();show();}
+$('#run').onclick=()=>{
+ started=performance.now();report={schema_version:1,experiment:'pplx-dp4a-v1',mode:'one-click',completed:false,browser:navigator.userAgent,phases:[],page_hidden_during_run:document.hidden,visibility_events:[{elapsed_ms:0,hidden:document.hidden}]};
+ $('#answer').hidden=true;$('#run').disabled=true;$('#stop').disabled=false;$('#progress').hidden=false;$('#progress').value=0;$('#status').textContent='Checking browser support…';
+ try{
+  url=URL.createObjectURL(new Blob([$('#suite-library').textContent,'\n',$('#probe').textContent],{type:'text/javascript'}));worker=new Worker(url);timer=setTimeout(()=>fail('The check timed out before it finished.'),1200000);
+  worker.onmessage=({data})=>{
+   if(data.type==='ready')worker.postMessage({run:true});
+   else if(data.type==='progress'){$('#status').textContent=data.message;$('#progress').value=data.step??0;if(data.phase_complete)report.phases.push(data.phase_complete);post('progress',{message:data.message})?.catch(()=>{});}
+   else if(data.type==='result'){report={...report,...data.report};cleanup();show();}
+  };
+  worker.onerror=e=>fail(e.message||'The benchmark worker failed.');
+ }catch(e){fail(e);}
+};
+$('#stop').onclick=()=>fail('Stopped before the full check finished.');
+$('#download').onclick=()=>{const link=document.createElement('a'),blob=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));link.href=blob;link.download='pplx-int8-verdict.json';link.click();setTimeout(()=>URL.revokeObjectURL(blob),1000);};
+document.addEventListener('visibilitychange',()=>{if(worker){report.visibility_events.push({elapsed_ms:performance.now()-started,hidden:document.hidden});if(document.hidden)report.page_hidden_during_run=true;}});
+if(query.get('autorun')==='1')$('#run').click();
+</script></html>

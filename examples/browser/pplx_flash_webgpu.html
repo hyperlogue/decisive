@@ -4,19 +4,25 @@
 try {
  const q=new URLSearchParams(location.search),pkg=q.get('package');
  if(!pkg?.startsWith('/artifacts/web/'))throw Error('Local package required');
+ const build=await(await fetch(pkg+'/build.json')).json();
+ const bytes=await(await fetch(pkg+'/decisive_bg.wasm')).arrayBuffer();
+ const wasm_sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
  if(q.get('worker')==='1') {
    const url=URL.createObjectURL(new Blob([`
      import init,{pplxFlashWebGpuCheck} from ${JSON.stringify(new URL(pkg+'/decisive.js',location.href).href)};
-     try { await init();postMessage(JSON.parse(await pplxFlashWebGpuCheck())); }
-     catch(error) {postMessage({error:String(error)});}
+     onmessage=async({data})=>{
+       try { await init({module_or_path:data});postMessage(JSON.parse(await pplxFlashWebGpuCheck())); }
+       catch(error) {postMessage({error:String(error)});}
+     };
    `],{type:'text/javascript'}));
    const worker=new Worker(url,{type:'module'});
-   try {window.result=await new Promise((resolve,reject)=>{worker.onmessage=e=>resolve(e.data);worker.onerror=e=>reject(Error(e.message));});}
+   try {window.result=await new Promise((resolve,reject)=>{worker.onmessage=e=>resolve(e.data);worker.onerror=e=>reject(Error(e.message));worker.postMessage(bytes,[bytes]);});}
    finally {worker.terminate();URL.revokeObjectURL(url);}
  } else {
-   const api=await import(pkg+'/decisive.js');await api.default();
+   const api=await import(pkg+'/decisive.js');await api.default({module_or_path:bytes});
    window.result=JSON.parse(await api.pplxFlashWebGpuCheck());
  }
+ window.result={...window.result,worker:q.get('worker')==='1',wasm_sha256,features:build.features};
 } catch(error) { window.result={error:String(error)}; }
 document.querySelector('#status').textContent=JSON.stringify(window.result,null,2);
 </script>

@@ -12,6 +12,22 @@ if [[ ${DECISIVE_PPLX_FMA:-0} == 1 ]]; then
   DECISIVE_WASM_FEATURES+=,pplx-wasm-fma
 fi
 bash scripts/build_decima_wasm.sh "$destination/pkg"
+if [[ ${DECISIVE_PPLX_CHECKS:-0} == 1 ]]; then
+  classic=$(mktemp -d)
+  trap 'rm -rf "$classic"' EXIT
+  wasm-bindgen --target no-modules --no-typescript --out-dir "$classic" \
+    "${DECISIVE_WASM_TARGET_DIR:-target}/wasm32-unknown-unknown/release/decisive.wasm"
+  cmp "$classic/decisive_bg.wasm" "$destination/pkg/decisive_bg.wasm"
+  cp "$classic/decisive.js" "$destination/pkg/decisive-classic.js"
+  python3 - "$destination/pkg" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+build=json.loads((root/'build.json').read_text())
+build['classic_js_sha256']=hashlib.sha256((root/'decisive-classic.js').read_bytes()).hexdigest()
+(root/'build.json').write_text(json.dumps(build,indent=2)+'\n')
+PY
+fi
 cp examples/pplx-flash/*.html examples/pplx-flash/*.js examples/pplx-flash/model.json "$destination/"
 python3 - "$destination" <<'PY'
 import hashlib,json,sys

@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Perplexity Flash · WebGPU check</title>
+  <style>
+    :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172d2b; background: #f4f6f5; line-height: 1.55; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 48px 24px; }
+    main { max-width: 880px; margin: auto; }
+    .eyebrow { color: #536b66; font-size: 12px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { font-size: clamp(28px, 5vw, 40px); line-height: 1.15; letter-spacing: -.035em; margin: 16px 0; }
+    .intro { max-width: 620px; color: #536660; margin: 0 0 28px; }
+    .panel { background: #fff; border: 1px solid #dce4e0; border-radius: 16px; padding: 28px; margin: 20px 0; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    button { font: inherit; font-size: 14px; font-weight: 650; border: 1px solid transparent; border-radius: 8px; padding: 11px 18px; cursor: pointer; min-height: 44px; }
+    button:focus-visible, summary:focus-visible { outline: 3px solid #6aaba0; outline-offset: 3px; }
+    #run { background: #146352; color: #fff; }
+    #run:hover:not(:disabled) { background: #0e4e41; }
+    #download { background: #fff; color: #23463e; border-color: #ccd8d3; }
+    #download:hover:not(:disabled) { background: #f1f5f3; }
+    button:disabled { cursor: default; opacity: .48; }
+    .privacy, .note { color: #60716c; font-size: 13px; }
+    .privacy { margin: 14px 0 0; }
+    .status-line { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    h2 { font-size: 18px; margin: 0; letter-spacing: -.015em; }
+    #badge { border-radius: 999px; background: #edf1ef; color: #536660; font-size: 12px; font-weight: 650; padding: 4px 10px; white-space: nowrap; }
+    #badge[data-state="passed"] { background: #e0f3e8; color: #175d3a; }
+    #badge[data-state="failed"] { background: #fbe8e6; color: #963b32; }
+    #badge[data-state="running"] { background: #e3f0f4; color: #225566; }
+    #status { color: #536660; margin: 0 0 20px; overflow-wrap: anywhere; }
+    ol { list-style: none; margin: 0; padding: 0; }
+    li { display: flex; gap: 16px; align-items: center; padding: 14px 0; border-top: 1px solid #edf0ee; }
+    .step-number { display: grid; place-items: center; width: 28px; height: 28px; background: #f1f5f3; border-radius: 50%; font-size: 13px; flex: none; }
+    li strong { display: block; font-size: 14px; font-weight: 600; }
+    li small { display: block; color: #60716c; font-size: 12px; }
+    .step-state { margin-left: auto; font-size: 12px; color: #60716c; white-space: nowrap; }
+    li[data-state="passed"] .step-state { color: #175d3a; }
+    li[data-state="failed"] .step-state { color: #963b32; }
+    li[data-state="running"] .step-state { color: #225566; font-weight: 650; }
+    #adapter { margin: 0 0 18px; color: #60716c; font-size: 13px; }
+    .table-wrap { overflow-x: auto; margin-top: 16px; }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; }
+    caption { text-align: left; font-size: 18px; font-weight: 650; margin-bottom: 14px; }
+    th { text-align: left; color: #60716c; font-weight: 500; font-size: 12px; }
+    td, th { padding: 10px 12px 10px 0; border-bottom: 1px solid #edf0ee; vertical-align: top; }
+    td:last-child, th:last-child { text-align: right; padding-right: 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    details { margin-top: 22px; }
+    summary { cursor: pointer; font-size: 13px; color: #536660; }
+    pre { background: #f4f6f5; color: #334d45; font-size: 12px; padding: 16px; border-radius: 8px; overflow: auto; max-height: 360px; }
+    footer { color: #60716c; font-size: 12px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 520px) { body { padding: 28px 16px; } .panel { padding: 20px; } .controls button { width: 100%; } .status-line { align-items: flex-start; } li { gap: 10px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Decisive / Browser diagnostics</div>
+    <h1>Perplexity Flash<br>WebGPU check</h1>
+    <p class="intro">Check that your browser runs the model’s GPU math correctly. Everything needed is in this file; no model download is required.</p>
+  </header>
+  <section class="panel" aria-label="Run checks">
+    <div class="controls">
+      <button id="run" type="button">Run WebGPU checks</button>
+      <button id="download" type="button" disabled>Download report</button>
+    </div>
+    <p class="privacy">Open in Chrome. Runs locally. Nothing is uploaded.</p>
+  </section>
+  <section class="panel" aria-labelledby="result-title">
+    <div class="status-line"><h2 id="result-title">Ready to test</h2><span id="badge">Ready</span></div>
+    <p id="status" role="status" aria-live="polite">Click Run WebGPU checks to begin. Keep this tab open while it runs.</p>
+    <p id="adapter" hidden></p>
+    <ol aria-label="Test stages">
+      <li id="step-0"><span class="step-number">1</span><div><strong>Check your GPU</strong><small>Availability and embedded package integrity</small></div><span class="step-state">Waiting</span></li>
+      <li id="step-1"><span class="step-number">2</span><div><strong>Test in the page</strong><small>Compare GPU kernels with CPU calculations</small></div><span class="step-state">Waiting</span></li>
+      <li id="step-2"><span class="step-number">3</span><div><strong>Test in a worker</strong><small>Repeat the same checks off the main thread</small></div><span class="step-state">Waiting</span></li>
+    </ol>
+    <div id="checks" class="table-wrap" hidden>
+      <table><caption>Kernel results</caption><thead><tr><th scope="col">Check</th><th scope="col">Context</th><th scope="col">Values</th><th scope="col">Max. error</th></tr></thead><tbody id="rows"></tbody></table>
+    </div>
+    <details id="details" hidden><summary>View full report</summary><pre id="report"></pre></details>
+  </section>
+  <footer>pplx-decider-flash-v1.2 · Test page v2 · Absolute error limit: 0.0001<br>Kernel correctness only. This does not run the full model or measure inference speed.</footer>
+  <noscript><p>Enable JavaScript to run these checks.</p></noscript>
+</main>
+<script id="wasm-bytes" type="application/octet-stream">__WASM_BASE64__</script>
+<script id="build-data" type="application/json">__BUILD_JSON__</script>
+<script id="model-data" type="application/json">__MODEL_JSON__</script>
+<script id="runner">
+/*__WASM_BINDINGS__*/
+
+const BOUND = 1e-4;
+const TIMEOUT_MS = 240000;
+
+function validateChecks(result) {
+  if (result.error) throw Error(result.error);
+  if (result.bound !== BOUND || !Array.isArray(result.checks) || !result.checks.length) {
+    throw Error('The kernel suite returned an incomplete report.');
+  }
+  for (const check of result.checks) {
+    if (!check.name || !Number.isInteger(check.values) || check.values <= 0 ||
+        !Number.isFinite(check.max_error) || check.max_error < 0 || check.max_error > BOUND) {
+      throw Error(`Kernel check failed: ${check.name || 'unknown check'}`);
+    }
+  }
+  return result;
+}
+
+function withTimeout(promise, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(Error(`${label} timed out after four minutes. Reload the page before retrying.`)), TIMEOUT_MS); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function runWorker(bytes, diagnostics) {
+  const source = document.querySelector('#runner').textContent;
+  const url = URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
+  let worker;
+  let startupTimer;
+  diagnostics.type = 'classic';
+  diagnostics.state = 'starting';
+  try {
+    worker = new Worker(url);
+    const copy = bytes.slice();
+    return await withTimeout(new Promise((resolve, reject) => {
+      startupTimer = setTimeout(() => reject(Error('The classic worker did not start within 10 seconds.')), 10000);
+      worker.onmessage = ({data}) => {
+        if (data.type === 'ready') {
+          clearTimeout(startupTimer);
+          diagnostics.state = 'ready';
+          diagnostics.secure_context = data.secure_context;
+          diagnostics.webgpu = data.webgpu;
+          worker.postMessage(copy.buffer, [copy.buffer]);
+        } else if (data.type === 'stage') {
+          diagnostics.state = data.stage;
+        } else if (data.type === 'result') {
+          diagnostics.state = 'finished';
+          resolve(data.result);
+        } else if (data.type === 'error') {
+          diagnostics.state = data.stage;
+          reject(Error(data.error));
+        }
+      };
+      worker.onerror = event => {
+        diagnostics.error = {message: event.message || '', line: event.lineno ?? null, column: event.colno ?? null};
+        reject(Error(event.message || `The classic worker failed during ${diagnostics.state} (${location.protocol} page).`));
+      };
+      worker.onmessageerror = () => reject(Error('The worker report could not be read.'));
+    }), 'Worker checks');
+  } finally {
+    clearTimeout(startupTimer);
+    worker?.terminate();
+    URL.revokeObjectURL(url);
+  }
+}
+
+function installPage() {
+  const $ = selector => document.querySelector(selector);
+  let report;
+  let reloadRequired = false;
+  const stage = (index, state, text) => {
+    const row = $(`#step-${index}`);
+    row.dataset.state = state;
+    row.querySelector('.step-state').textContent = text;
+  };
+  const status = (state, title, detail) => {
+    $('#badge').dataset.state = state;
+    $('#badge').textContent = {running: 'Running', passed: 'Passed', failed: 'Failed'}[state];
+    $('#result-title').textContent = title;
+    $('#status').textContent = detail;
+  };
+  const showReport = () => {
+    $('#report').textContent = JSON.stringify(report, null, 2);
+    $('#details').hidden = false;
+    $('#download').disabled = false;
+    window.result = report;
+  };
+  const addChecks = (context, checks) => {
+    $('#checks').hidden = false;
+    for (const check of checks) {
+      const row = document.createElement('tr');
+      for (const text of [check.name, context, check.values.toLocaleString(), check.max_error.toExponential(2)]) {
+        const cell = document.createElement('td');
+        cell.textContent = text;
+        row.append(cell);
+      }
+      $('#rows').append(row);
+    }
+  };
+
+  $('#download').addEventListener('click', () => {
+    if (!report) return;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2) + '\n'], {type: 'application/json'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `pplx-webgpu-${report.passed ? 'passed' : 'failed'}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  $('#run').addEventListener('click', async () => {
+    if (reloadRequired) { location.reload(); return; }
+    $('#run').disabled = true;
+    $('#download').disabled = true;
+    $('#rows').replaceChildren();
+    $('#checks').hidden = true;
+    $('#details').hidden = true;
+    $('#adapter').hidden = true;
+    window.result = undefined;
+    for (let i = 0; i < 3; i++) stage(i, 'waiting', 'Waiting');
+    const started = performance.now();
+    let current = 0;
+    report = {
+      schema_version: 1,
+      harness_version: 2,
+      mode: 'kernels-only',
+      passed: false,
+      started_at: new Date().toISOString(),
+      browser: navigator.userAgent,
+      secure_context: isSecureContext,
+      protocol: location.protocol,
+      bound: BOUND,
+      cases: 0,
+      scope: 'Kernel correctness only; full-model parity and inference speed not tested',
+      contexts: [],
+    };
+    try {
+      status('running', 'Checking your browser', 'Checking GPU availability and the embedded test package…');
+      stage(0, 'running', 'Checking…');
+      report.model = JSON.parse($('#model-data').textContent);
+      report.build = JSON.parse($('#build-data').textContent);
+      if (!isSecureContext) throw Error('This browser has not allowed GPU access for this page. Open the downloaded HTML file directly in Chrome.');
+      if (!navigator.gpu) throw Error('WebGPU is unavailable. Try opening this file in Chrome with graphics acceleration enabled.');
+      const adapter = await withTimeout(navigator.gpu.requestAdapter({powerPreference: 'high-performance'}), 'GPU discovery');
+      if (!adapter) throw Error('No WebGPU adapter is available. Check graphics acceleration in Chrome, then reopen this file.');
+      const info = adapter.info || {};
+      report.adapter = {
+        vendor: info.vendor || '', architecture: info.architecture || '',
+        device: info.device || '', description: info.description || '',
+        is_fallback_adapter: info.isFallbackAdapter ?? adapter.isFallbackAdapter ?? null,
+      };
+      report.features = Array.from(adapter.features).sort();
+      report.software_gpu = report.adapter.is_fallback_adapter === true || /swiftshader|llvmpipe|software/i.test(JSON.stringify(report.adapter));
+      const device = await withTimeout(adapter.requestDevice(), 'GPU device creation');
+      device.destroy();
+      const bytes = Uint8Array.from(atob($('#wasm-bytes').textContent.trim()), c => c.charCodeAt(0));
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+      report.wasm_sha256 = Array.from(digest, b => b.toString(16).padStart(2, '0')).join('');
+      if (report.wasm_sha256 !== report.build.wasm_sha256) throw Error('The embedded Wasm does not match its build record. Repackage this file.');
+      $('#adapter').textContent = [info.vendor, info.architecture, info.description].filter(Boolean).join(' · ') || 'WebGPU adapter available';
+      $('#adapter').hidden = false;
+      stage(0, 'passed', 'Passed');
+
+      current = 1;
+      stage(1, 'running', 'Running…');
+      status('running', 'Testing in the page', 'Compiling shaders and comparing GPU output with CPU calculations. This may take a few minutes.');
+      await new Promise(resolve => setTimeout(resolve, 50));
+      await withTimeout(wasm_bindgen({module_or_path: bytes}), 'Wasm initialization');
+      const main = validateChecks(JSON.parse(await withTimeout(wasm_bindgen.pplxFlashWebGpuCheck(), 'Main-thread checks')));
+      report.contexts.push({context: 'main-thread', ...main});
+      addChecks('Page', main.checks);
+      stage(1, 'passed', `${main.checks.length} passed`);
+
+      current = 2;
+      stage(2, 'running', 'Running…');
+      status('running', 'Testing in a worker', 'Repeating the same checks in a dedicated worker…');
+      report.worker = {};
+      const worker = validateChecks(await runWorker(bytes, report.worker));
+      report.contexts.push({context: 'worker', ...worker});
+      addChecks('Worker', worker.checks);
+      const coverage = result => JSON.stringify(result.checks.map(c => [c.name, c.values]));
+      if (coverage(main) !== coverage(worker)) throw Error('The page and worker ran different kernel checks.');
+      stage(2, 'passed', `${worker.checks.length} passed`);
+      const allChecks = report.contexts.flatMap(r => r.checks);
+      report.max_absolute_kernel_error = Math.max(...allChecks.map(c => c.max_error));
+      report.passed = true;
+      status('passed', `${allChecks.length} kernel checks passed`, `Both contexts are within the 0.0001 error limit.${report.software_gpu ? ' A software adapter was detected.' : ''} Download the report to share the results.`);
+    } catch (error) {
+      report.error = String(error);
+      report.failed_stage = ['adapter', 'main-thread', 'worker'][current];
+      stage(current, 'failed', 'Failed');
+      for (let i = current + 1; i < 3; i++) stage(i, 'waiting', 'Not run');
+      status('failed', 'The check could not finish', `${error.message || error} Download the report to share the error.`);
+      reloadRequired = true;
+    } finally {
+      report.elapsed_ms = performance.now() - started;
+      showReport();
+      $('#run').disabled = false;
+      $('#run').textContent = reloadRequired ? 'Reload to try again' : 'Run again';
+    }
+  });
+}
+
+if (typeof document === 'undefined') {
+  self.onmessage = async ({data}) => {
+    let stage = 'capabilities';
+    try {
+      if (!navigator.gpu) throw Error('WebGPU is unavailable in this browser’s workers.');
+      stage = 'wasm-initialization';
+      self.postMessage({type: 'stage', stage});
+      await wasm_bindgen({module_or_path: data});
+      stage = 'kernel-checks';
+      self.postMessage({type: 'stage', stage});
+      const result = JSON.parse(await wasm_bindgen.pplxFlashWebGpuCheck());
+      self.postMessage({type: 'result', result});
+    } catch (error) {
+      self.postMessage({type: 'error', stage, error: String(error)});
+    }
+  };
+  self.postMessage({type: 'ready', secure_context: self.isSecureContext, webgpu: Boolean(navigator.gpu)});
+} else {
+  installPage();
+}
+</script>
+</body>
+</html>
