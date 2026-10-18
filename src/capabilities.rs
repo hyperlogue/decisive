@@ -38,7 +38,17 @@ fn manifest() -> Value {
             formats.push("f16-storage");
         }
         if id == "pplx-flash" && cfg!(feature = "int8") {
-            formats.push("int8");
+            formats.extend([
+                "int8",
+                "q8",
+                "q4",
+                "q4-e4",
+                "q4-mse",
+                "q4-e4-mse",
+                "q4-e4-nf4",
+                "q4-e4-affine",
+                "q4-all",
+            ]);
         }
         if matches!(id, "laya" | "decima") && cfg!(feature = "int8") {
             formats.extend(["int8", "int8-weights"]);
@@ -78,7 +88,7 @@ fn manifest() -> Value {
         "http":{"available":!models.is_empty(),"endpoint":"/v1/systemone","method":"POST","backend":"cpu","concurrency":"serial per process","command":"decisive <model> serve"},
         "notes":[
             "Capabilities describe this compiled native binary, not installed checkpoints or model quality.",
-            "FP32 is the base computation type. FP16 stores weights with FP32 accumulation; INT8 modes retain floating-point heads.",
+            "Floating-point accumulation is retained with quantized weights. PPLX q8/q4/q4-all also quantize embeddings and readout; legacy int8 retains floating-point heads.",
             "Decima mixed FP16/INT8 checkpoints require both fp16 and int8 features.",
             "Browser Wasm/WebGPU packages are separate target builds; enabling wasm does not make the native CLI a Wasm runner.",
             "WebGPU inference is not exposed by the CLI or HTTP server."
@@ -174,6 +184,20 @@ mod tests {
                         || cfg!(feature = "int8")
                 );
                 assert!(!formats.contains(&json!("f16-storage")) || cfg!(feature = "fp16"));
+                if model["id"] == "pplx-flash" {
+                    for mode in [
+                        "q8",
+                        "q4",
+                        "q4-e4",
+                        "q4-mse",
+                        "q4-e4-mse",
+                        "q4-e4-nf4",
+                        "q4-e4-affine",
+                        "q4-all",
+                    ] {
+                        assert_eq!(formats.contains(&json!(mode)), cfg!(feature = "int8"));
+                    }
+                }
                 if backend["id"] == "webgpu" {
                     assert_eq!(backend["interfaces"], json!(["rust"]));
                 }

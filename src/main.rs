@@ -81,11 +81,29 @@ mod tests {
                 Args::try_parse_from(["decisive", "pplx-flash", "--quantization", "bf16", "serve"])
                     .is_ok()
             );
-            assert_eq!(
-                Args::try_parse_from(["decisive", "pplx-flash", "--quantization", "int8", "serve"])
+            for precision in [
+                "int8",
+                "q8",
+                "q4",
+                "q4-e4",
+                "q4-mse",
+                "q4-e4-mse",
+                "q4-e4-nf4",
+                "q4-e4-affine",
+                "q4-all",
+            ] {
+                assert_eq!(
+                    Args::try_parse_from([
+                        "decisive",
+                        "pplx-flash",
+                        "--quantization",
+                        precision,
+                        "serve"
+                    ])
                     .is_ok(),
-                cfg!(feature = "int8")
-            );
+                    cfg!(feature = "int8")
+                );
+            }
         }
         #[cfg(feature = "decima")]
         {

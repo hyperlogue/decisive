@@ -5,15 +5,19 @@ mod input;
 mod int8;
 #[cfg(feature = "cpu")]
 mod native;
+#[cfg(all(feature = "cpu", feature = "int8"))]
+mod quantization;
+#[cfg(all(feature = "cpu", feature = "int8"))]
+mod quantized_rows;
 pub mod weights;
 #[cfg(feature = "cpu")]
-pub use native::Model;
+pub use native::{Model, Precision};
+#[cfg(all(feature = "wasm", feature = "webgpu"))]
+mod browser_gpu;
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 mod wasm_simd;
 #[cfg(feature = "wasm")]
 mod web;
-#[cfg(all(feature = "wasm", feature = "webgpu"))]
-mod browser_gpu;
 #[cfg(all(feature = "wasm", feature = "webgpu"))]
 mod webgpu;
 use anyhow::{Result, ensure};
@@ -43,6 +47,8 @@ pub struct Engine {
     config: Value,
     input: input::Encoder,
     readout: Vec<f32>,
+    #[cfg(all(feature = "cpu", feature = "int8"))]
+    quantized_readout: Option<int8::Matrix>,
     #[cfg(feature = "cpu")]
     avx2: bool,
     pub prune_last: bool,
@@ -116,6 +122,8 @@ impl Engine {
             config,
             input,
             readout,
+            #[cfg(all(feature = "cpu", feature = "int8"))]
+            quantized_readout: None,
             #[cfg(feature = "cpu")]
             avx2: !portable && cpu::avx2_available(),
             prune_last: true,
@@ -138,6 +146,15 @@ impl Engine {
                 .take(count)
                 .map(|w| w.iter().zip(x).map(|(w, x)| w * x).sum())
                 .collect();
+            #[cfg(all(feature = "cpu", feature = "int8"))]
+            let values = if let Some(readout) = &self.quantized_readout {
+                let mut values = Vec::new();
+                readout.apply(x, &mut values, &mut int8::Scratch::default());
+                values.truncate(count);
+                values
+            } else {
+                values
+            };
             ensure!(values.iter().all(|v| v.is_finite()), "non-finite logits");
             logits.push(values);
         }

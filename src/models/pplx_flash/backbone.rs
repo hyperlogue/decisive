@@ -73,26 +73,60 @@ pub(super) struct Work {
 }
 impl Layer {
     pub(super) fn load(w: &Weights<'_>, config: &Value, i: usize, avx2: bool) -> Result<Self> {
-        Self::load_precision(w, config, i, avx2, false)
+        Self::load_precision(w, config, i, avx2, 0, 0, false, false, false)
     }
     #[cfg(all(feature = "cpu", feature = "int8"))]
-    pub(super) fn load_int8(w: &Weights<'_>, config: &Value, i: usize, avx2: bool) -> Result<Self> {
-        Self::load_precision(w, config, i, avx2, true)
+    pub(super) fn load_quantized(
+        w: &Weights<'_>,
+        config: &Value,
+        i: usize,
+        avx2: bool,
+        weight_bits: u8,
+        activation_bits: u8,
+        all_projections: bool,
+        optimized: bool,
+        affine: bool,
+    ) -> Result<Self> {
+        Self::load_precision(
+            w,
+            config,
+            i,
+            avx2,
+            weight_bits,
+            activation_bits,
+            all_projections,
+            optimized,
+            affine,
+        )
     }
     fn load_precision(
         w: &Weights<'_>,
         config: &Value,
         i: usize,
         avx2: bool,
-        _int8: bool,
+        _weight_bits: u8,
+        _activation_bits: u8,
+        _all_projections: bool,
+        _optimized: bool,
+        _affine: bool,
     ) -> Result<Self> {
         ensure!(i < 32, "layer index out of range");
         let prefix = "language_model";
         let p = format!("{prefix}.layers.{i}");
         let linear = |name: &str, input, output| {
             #[cfg(all(feature = "cpu", feature = "int8"))]
-            if _int8 && output >= 512 {
-                return Linear::load_int8(w, &format!("{p}.{name}"), input, output, avx2);
+            if _weight_bits != 0 && (_all_projections || output >= 512) {
+                return Linear::load_quantized(
+                    w,
+                    &format!("{p}.{name}"),
+                    input,
+                    output,
+                    avx2,
+                    _weight_bits,
+                    _activation_bits,
+                    _optimized,
+                    _affine,
+                );
             }
             Linear::load(w, &format!("{p}.{name}"), input, output, avx2)
         };
@@ -192,15 +226,10 @@ impl Layer {
         }
         cpu::add(&mut work.hidden, &work.projected);
         cpu::rms_from(&work.hidden, &mut work.norm, &self.post_norm, 1e-6, true);
-        self.gate.apply(
+        Linear::apply_pair(
+            [&self.gate, &self.up],
             &work.norm,
-            &mut work.gate,
-            plan.projection_rows,
-            &mut work.linear_scratch,
-        );
-        self.up.apply(
-            &work.norm,
-            &mut work.up,
+            [&mut work.gate, &mut work.up],
             plan.projection_rows,
             &mut work.linear_scratch,
         );
@@ -229,14 +258,13 @@ impl Delta {
         p: Plan,
         avx2: bool,
     ) {
-        self.qkv.apply(
+        Linear::apply_pair(
+            [&self.qkv, &self.z],
             &w.norm,
-            &mut w.qkv,
+            [&mut w.qkv, &mut w.z],
             p.projection_rows,
             &mut w.linear_scratch,
         );
-        self.z
-            .apply(&w.norm, &mut w.z, p.projection_rows, &mut w.linear_scratch);
         self.a
             .apply(&w.norm, &mut w.a, p.projection_rows, &mut w.linear_scratch);
         self.b
@@ -463,15 +491,10 @@ impl Attention {
         avx2: bool,
         markers: Option<&[usize]>,
     ) {
-        self.k.apply(
+        Linear::apply_pair(
+            [&self.k, &self.v],
             &w.norm,
-            &mut w.key,
-            p.projection_rows,
-            &mut w.linear_scratch,
-        );
-        self.v.apply(
-            &w.norm,
-            &mut w.value,
+            [&mut w.key, &mut w.value],
             p.projection_rows,
             &mut w.linear_scratch,
         );

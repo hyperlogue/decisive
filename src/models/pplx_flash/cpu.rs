@@ -77,26 +77,54 @@ impl Linear {
         })
     }
     #[cfg(all(feature = "cpu", feature = "int8"))]
-    pub fn load_int8(
+    pub fn load_quantized(
         w: &Weights<'_>,
         name: &str,
         input: usize,
         output: usize,
         avx2: bool,
+        weight_bits: u8,
+        activation_bits: u8,
+        optimized: bool,
+        affine: bool,
     ) -> Result<Self> {
         Ok(Self {
             input,
             output,
             weight_bf16: Vec::new(),
-            int8: Some(super::int8::Matrix::from_bf16(
+            int8: Some(super::int8::Matrix::from_bf16_optimized(
                 w.bytes(&format!("{name}.weight"), &[output, input])?,
                 input,
                 output,
                 avx2,
+                weight_bits,
+                activation_bits,
+                optimized,
+                affine,
             )?),
             #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
             avx2,
         })
+    }
+    pub fn apply_pair(
+        linears: [&Self; 2],
+        x: &[f32],
+        outputs: [&mut Vec<f32>; 2],
+        rows: usize,
+        scratch: &mut ProjectionScratch,
+    ) {
+        #[cfg(all(feature = "cpu", feature = "int8"))]
+        if let (Some(a), Some(b)) = (&linears[0].int8, &linears[1].int8) {
+            let start = scratch.profile.then(std::time::Instant::now);
+            super::int8::Matrix::apply_pair([a, b], x, outputs, &mut scratch.int8);
+            if let Some(start) = start {
+                scratch.projection_ms += start.elapsed().as_secs_f64() * 1000.;
+            }
+            return;
+        }
+        for (linear, out) in linears.into_iter().zip(outputs) {
+            linear.apply(x, out, rows, scratch);
+        }
     }
     #[cfg(feature = "cpu")]
     pub fn bytes(&self) -> usize {

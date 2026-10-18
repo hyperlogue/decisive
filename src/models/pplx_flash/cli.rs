@@ -1,6 +1,6 @@
 use anyhow::{Result, ensure};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
-use decisive::pplx_flash::{Model, REPOSITORY, REVISION, SHARDS};
+use decisive::pplx_flash::{Model, Precision, REPOSITORY, REVISION, SHARDS};
 use serde_json::{Value, json};
 use std::{
     io::{self, BufRead, Read},
@@ -21,7 +21,7 @@ pub(crate) struct Args {
         long,
         value_enum,
         default_value = "bf16",
-        help = "INT8 uses grouped W8A8 projections and keeps packed weights resident"
+        help = "bf16: original weights; q8: W8A8/E8; q4: W4A8/E8; q4-e4: W4A8/E4; -mse: fitted integer Q4; q4-e4-nf4: fitted weights and NF4 embeddings; q4-e4-affine: fitted scale and offset; q4-all: W4A4/E4 (readout follows weights)"
     )]
     quantization: Quantization,
     #[arg(
@@ -31,7 +31,7 @@ pub(crate) struct Args {
     profile: bool,
     #[arg(
         long,
-        help = "Keep packed BF16 decoder weights resident; INT8 is always resident"
+        help = "Keep packed BF16 decoder weights resident; quantized modes are always resident"
     )]
     resident: bool,
     #[arg(long)]
@@ -44,6 +44,52 @@ enum Quantization {
     Bf16,
     #[cfg(feature = "int8")]
     Int8,
+    #[cfg(feature = "int8")]
+    Q8,
+    #[cfg(feature = "int8")]
+    Q4,
+    #[cfg(feature = "int8")]
+    #[value(name = "q4-e4")]
+    Q4E4,
+    #[cfg(feature = "int8")]
+    #[value(name = "q4-mse")]
+    Q4Mse,
+    #[cfg(feature = "int8")]
+    #[value(name = "q4-e4-mse")]
+    Q4E4Mse,
+    #[cfg(feature = "int8")]
+    #[value(name = "q4-e4-nf4")]
+    Q4E4Nf4,
+    #[cfg(feature = "int8")]
+    #[value(name = "q4-e4-affine")]
+    Q4E4Affine,
+    #[cfg(feature = "int8")]
+    Q4All,
+}
+impl From<Quantization> for Precision {
+    fn from(value: Quantization) -> Self {
+        match value {
+            Quantization::Bf16 => Self::Bf16,
+            #[cfg(feature = "int8")]
+            Quantization::Int8 => Self::Int8,
+            #[cfg(feature = "int8")]
+            Quantization::Q8 => Self::Q8,
+            #[cfg(feature = "int8")]
+            Quantization::Q4 => Self::Q4,
+            #[cfg(feature = "int8")]
+            Quantization::Q4E4 => Self::Q4E4,
+            #[cfg(feature = "int8")]
+            Quantization::Q4Mse => Self::Q4Mse,
+            #[cfg(feature = "int8")]
+            Quantization::Q4E4Mse => Self::Q4E4Mse,
+            #[cfg(feature = "int8")]
+            Quantization::Q4E4Nf4 => Self::Q4E4Nf4,
+            #[cfg(feature = "int8")]
+            Quantization::Q4E4Affine => Self::Q4E4Affine,
+            #[cfg(feature = "int8")]
+            Quantization::Q4All => Self::Q4All,
+        }
+    }
 }
 #[derive(Subcommand)]
 enum Command {
@@ -143,11 +189,7 @@ pub(crate) fn run(args: Args) -> Result<()> {
             &serde_json::from_slice(&std::fs::read(input)?)?,
             args.max_length,
         )?;
-        info["precision"] = match args.quantization {
-            Quantization::Bf16 => json!("bf16-storage-f32-compute"),
-            #[cfg(feature = "int8")]
-            Quantization::Int8 => json!("int8-w8a8-g64"),
-        };
+        info["precision"] = json!(Precision::from(args.quantization).name());
         println!("{info}");
         return Ok(());
     }
@@ -156,11 +198,7 @@ pub(crate) fn run(args: Args) -> Result<()> {
         .build()?;
     pool.install(||{
         let loading=std::time::Instant::now();
-        let mut model=match args.quantization {
-            Quantization::Bf16 => Model::load(&args.model,args.portable)?,
-            #[cfg(feature = "int8")]
-            Quantization::Int8 => Model::load_int8(&args.model,args.portable)?,
-        };model.engine.prune_last=!args.full_last_layer;model.profile=args.profile;
+        let mut model=Model::load_with_precision(&args.model,args.portable,args.quantization.into())?;model.engine.prune_last=!args.full_last_layer;model.profile=args.profile;
         if args.resident{model.preload_weights()?;}
         let model_load_ms=loading.elapsed().as_secs_f64()*1000.;
         match args.command{

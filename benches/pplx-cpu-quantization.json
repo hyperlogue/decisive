@@ -1,0 +1,527 @@
+{
+  "inputs": 160,
+  "questions": 237,
+  "corpus_sha256": "8cf4d26bc03658563b6e20fcededd84e8fbf73143a8c14b20ef2b6c2c91d712d",
+  "checkpoint_revision": "6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d",
+  "modes": [
+    "bf16",
+    "q8",
+    "q4",
+    "q4-all"
+  ],
+  "scheme": "symmetric absmax, groups of 64, ties-to-even, FP32 scales; readout follows weight/activation bits; embeddings grouped by row",
+  "q4_all_scope": "W4A4 projections including small gates and readout, E4 embeddings; FP32 normalization, convolution, attention, recurrent state, residuals and accumulation; activation codes held in byte lanes for AVX2 dots",
+  "methodology": {
+    "primary": "One predeclared primary question per input; auxiliary judgments reported separately.",
+    "score": "Class accuracy and flips use probability argmax; numeric score drift uses the expected score returned by the API.",
+    "binary": "noul is classified true at probability >= 0.5.",
+    "uncertainty": "4,000 paired bootstrap resamples over inputs. A zero-width interval on unchanged samples does not establish population equivalence."
+  },
+  "limitations": [
+    "160-input frozen subset, not full TweetEval/BANKING77 or production accuracy",
+    "Authored tone/stress labels are not independent human annotations",
+    "CPU grouped quantization differs from browser per-row quantization",
+    "Quality-run latency is not a warmed performance measurement",
+    "Latency is host-specific; raw samples are retained and small differences between quantized modes should not be overinterpreted"
+  ],
+  "primary_metrics": {
+    "bf16": {
+      "n": 160,
+      "correct": 129,
+      "accuracy": 0.80625,
+      "macro_f1": null,
+      "nll": 0.5063342152137102,
+      "brier": 0.2714660955437741,
+      "ordinal_mae": 0.3568313546538637,
+      "ordinal_bias": -0.00495458474185624,
+      "confusion": null
+    },
+    "q8": {
+      "n": 160,
+      "correct": 129,
+      "accuracy": 0.80625,
+      "macro_f1": null,
+      "nll": 0.503894834284678,
+      "brier": 0.27018358581869995,
+      "ordinal_mae": 0.35536129499968144,
+      "ordinal_bias": -0.006467421420512462,
+      "confusion": null
+    },
+    "q4": {
+      "n": 160,
+      "correct": 129,
+      "accuracy": 0.80625,
+      "macro_f1": null,
+      "nll": 0.5092799122381901,
+      "brier": 0.272735615734737,
+      "ordinal_mae": 0.3563938125253139,
+      "ordinal_bias": -0.02348463955628175,
+      "confusion": null
+    },
+    "q4-all": {
+      "n": 160,
+      "correct": 122,
+      "accuracy": 0.7625,
+      "macro_f1": null,
+      "nll": 0.5881543596547628,
+      "brier": 0.3167804912331428,
+      "ordinal_mae": 0.38314005538933343,
+      "ordinal_bias": -0.0594702153243397,
+      "confusion": null
+    }
+  },
+  "primary_comparisons": [
+    {
+      "reference": "bf16",
+      "candidate": "q8",
+      "questions": 160,
+      "labeled_questions": 160,
+      "decision_flips": 0,
+      "high_confidence_reference_flips": 0,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 0,
+      "accuracy_delta": 0.0,
+      "mcnemar_exact_p": 1,
+      "mean_total_variation": 0.004901865719122409,
+      "numeric_drift": {
+        "score": {
+          "n": 72,
+          "mean_absolute": 0.007043520527470189,
+          "max_absolute": 0.04645814308134666,
+          "mean_signed": -0.0015128366786562209
+        },
+        "noul": {
+          "n": 6,
+          "mean_absolute": 0.0012957588429543937,
+          "max_absolute": 0.0055459009331965126,
+          "mean_signed": 0.0010977373391716089
+        }
+      },
+      "paired_bootstrap_95_ci": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "reference": "bf16",
+      "candidate": "q4",
+      "questions": 160,
+      "labeled_questions": 160,
+      "decision_flips": 4,
+      "high_confidence_reference_flips": 0,
+      "correct_to_wrong": 1,
+      "wrong_to_correct": 1,
+      "accuracy_delta": 0.0,
+      "mcnemar_exact_p": 1,
+      "mean_total_variation": 0.0390929091654753,
+      "numeric_drift": {
+        "score": {
+          "n": 72,
+          "mean_absolute": 0.03734876581592146,
+          "max_absolute": 0.16015068280730493,
+          "mean_signed": -0.018530054814425514
+        },
+        "noul": {
+          "n": 6,
+          "mean_absolute": 0.010072268610023234,
+          "max_absolute": 0.03770342801466742,
+          "mean_signed": -0.007271570759347027
+        }
+      },
+      "paired_bootstrap_95_ci": [
+        -0.01875,
+        0.01875
+      ]
+    },
+    {
+      "reference": "bf16",
+      "candidate": "q4-all",
+      "questions": 160,
+      "labeled_questions": 160,
+      "decision_flips": 16,
+      "high_confidence_reference_flips": 0,
+      "correct_to_wrong": 10,
+      "wrong_to_correct": 3,
+      "accuracy_delta": -0.04375,
+      "mcnemar_exact_p": 0.09228515625,
+      "mean_total_variation": 0.11209194303492885,
+      "numeric_drift": {
+        "score": {
+          "n": 72,
+          "mean_absolute": 0.11420979061155866,
+          "max_absolute": 0.47534858161312465,
+          "mean_signed": -0.05451563058248346
+        },
+        "noul": {
+          "n": 6,
+          "mean_absolute": 0.0357515826181923,
+          "max_absolute": 0.10029776737586438,
+          "mean_signed": -0.02855265544067432
+        }
+      },
+      "paired_bootstrap_95_ci": [
+        -0.0875,
+        0.0
+      ]
+    }
+  ],
+  "all_question_drift": [
+    {
+      "reference": "bf16",
+      "candidate": "q8",
+      "questions": 237,
+      "labeled_questions": 236,
+      "decision_flips": 0,
+      "high_confidence_reference_flips": 0,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 0,
+      "accuracy_delta": 0.0,
+      "mcnemar_exact_p": null,
+      "mean_total_variation": 0.004702934257029842,
+      "numeric_drift": {
+        "score": {
+          "n": 76,
+          "mean_absolute": 0.007264263890596966,
+          "max_absolute": 0.04645814308134666,
+          "mean_signed": -0.0010520217290056013
+        },
+        "noul": {
+          "n": 79,
+          "mean_absolute": 0.0038935312166263223,
+          "max_absolute": 0.01763401812822807,
+          "mean_signed": 0.002912321383474805
+        }
+      }
+    },
+    {
+      "reference": "bf16",
+      "candidate": "q4",
+      "questions": 237,
+      "labeled_questions": 236,
+      "decision_flips": 6,
+      "high_confidence_reference_flips": 0,
+      "correct_to_wrong": 2,
+      "wrong_to_correct": 1,
+      "accuracy_delta": -0.00423728813559322,
+      "mcnemar_exact_p": null,
+      "mean_total_variation": 0.03893983728271103,
+      "numeric_drift": {
+        "score": {
+          "n": 76,
+          "mean_absolute": 0.039155553082696984,
+          "max_absolute": 0.2523383893636144,
+          "mean_signed": -0.02042276091877948
+        },
+        "noul": {
+          "n": 79,
+          "mean_absolute": 0.03514154711578592,
+          "max_absolute": 0.14501074179347784,
+          "mean_signed": 0.01683320193857428
+        }
+      }
+    },
+    {
+      "reference": "bf16",
+      "candidate": "q4-all",
+      "questions": 237,
+      "labeled_questions": 236,
+      "decision_flips": 25,
+      "high_confidence_reference_flips": 1,
+      "correct_to_wrong": 17,
+      "wrong_to_correct": 4,
+      "accuracy_delta": -0.05508474576271186,
+      "mcnemar_exact_p": null,
+      "mean_total_variation": 0.10549159403827775,
+      "numeric_drift": {
+        "score": {
+          "n": 76,
+          "mean_absolute": 0.11478731757530153,
+          "max_absolute": 0.47534858161312465,
+          "mean_signed": -0.05696844865052239
+        },
+        "noul": {
+          "n": 79,
+          "mean_absolute": 0.0873662670792687,
+          "max_absolute": 0.5336271745377467,
+          "mean_signed": 0.02312985002998357
+        }
+      }
+    }
+  ],
+  "errors": {
+    "q8": {
+      "logit": {
+        "n": 840,
+        "mae": 0.047626918838137675,
+        "rmse": 0.06146125210859691,
+        "max_absolute": 0.2850208282470703
+      },
+      "probability": {
+        "n": 840,
+        "mae": 0.002653798616466839,
+        "rmse": 0.00478112710952486,
+        "max_absolute": 0.04053266828260593
+      }
+    },
+    "q4": {
+      "logit": {
+        "n": 840,
+        "mae": 0.3407186303819929,
+        "rmse": 0.4534063507125324,
+        "max_absolute": 1.7524452209472656
+      },
+      "probability": {
+        "n": 840,
+        "mae": 0.021973193895244082,
+        "rmse": 0.039633152170094,
+        "max_absolute": 0.2677767813448476
+      }
+    },
+    "q4-all": {
+      "logit": {
+        "n": 840,
+        "mae": 0.8640841512452988,
+        "rmse": 1.121668512283194,
+        "max_absolute": 4.805103302001953
+      },
+      "probability": {
+        "n": 840,
+        "mae": 0.05952739949302816,
+        "rmse": 0.10621364183243936,
+        "max_absolute": 0.5529520398188491
+      }
+    }
+  },
+  "model_bytes": {
+    "bf16": {
+      "packed_projection_bytes": 7138181120,
+      "embedding_bytes": 1271398400,
+      "readout_bytes": 2611200
+    },
+    "q8": {
+      "packed_projection_bytes": 3792158720,
+      "embedding_bytes": 675430400,
+      "readout_bytes": 696320
+    },
+    "q4": {
+      "packed_projection_bytes": 2007613440,
+      "embedding_bytes": 675430400,
+      "readout_bytes": 368640
+    },
+    "q4-all": {
+      "packed_projection_bytes": 2007613440,
+      "embedding_bytes": 357580800,
+      "readout_bytes": 368640
+    }
+  },
+  "weight_bytes_scope": "packed decoder projections plus full vocabulary embeddings and readout; excludes small FP32 tensors, workspaces, tokenizer and allocator overhead",
+  "performance": [
+    {
+      "case": "regression-multilingual",
+      "modes": {
+        "bf16": {
+          "median_ms": 7965.563924,
+          "samples_ms": [
+            8630.85843,
+            8200.10701,
+            7671.164006,
+            7731.020838
+          ],
+          "threads": 3,
+          "tokens": 229,
+          "load_ms": 18464.452793,
+          "projection_ms": 7448.4729405
+        },
+        "q8": {
+          "median_ms": 5699.709203,
+          "samples_ms": [
+            5808.794121,
+            5701.076156,
+            5531.085678,
+            5698.34225
+          ],
+          "threads": 3,
+          "tokens": 229,
+          "load_ms": 9620.810703,
+          "projection_ms": 5242.96391
+        },
+        "q4": {
+          "median_ms": 5928.7647355,
+          "samples_ms": [
+            5875.954416,
+            5981.575055,
+            5715.5279740000005,
+            6137.018859000001
+          ],
+          "threads": 3,
+          "tokens": 229,
+          "load_ms": 7126.6512,
+          "projection_ms": 5393.3220375
+        },
+        "q4-all": {
+          "median_ms": 5901.1178065,
+          "samples_ms": [
+            5749.600754,
+            5929.434781999999,
+            5872.8008310000005,
+            5946.549767
+          ],
+          "threads": 3,
+          "tokens": 229,
+          "load_ms": 7891.591364,
+          "projection_ms": 5386.7075095
+        }
+      }
+    },
+    {
+      "case": "regression-request",
+      "modes": {
+        "bf16": {
+          "median_ms": 4108.4024215,
+          "samples_ms": [
+            5205.623383,
+            4056.6510080000003,
+            4160.153835,
+            3940.8649750000004
+          ],
+          "threads": 3,
+          "tokens": 117,
+          "load_ms": 18464.452793,
+          "projection_ms": 3841.845534
+        },
+        "q8": {
+          "median_ms": 2857.8995575,
+          "samples_ms": [
+            2928.4564020000003,
+            2787.342713,
+            2781.849574,
+            2960.923721
+          ],
+          "threads": 3,
+          "tokens": 117,
+          "load_ms": 9620.810703,
+          "projection_ms": 2622.7034595
+        },
+        "q4": {
+          "median_ms": 3168.6112395,
+          "samples_ms": [
+            2829.751111,
+            3198.7062800000003,
+            3138.516199,
+            3274.907421
+          ],
+          "threads": 3,
+          "tokens": 117,
+          "load_ms": 7126.6512,
+          "projection_ms": 2930.2312760000004
+        },
+        "q4-all": {
+          "median_ms": 2993.339669,
+          "samples_ms": [
+            3011.9510649999997,
+            2974.728273,
+            3187.77424,
+            2891.858861
+          ],
+          "threads": 3,
+          "tokens": 117,
+          "load_ms": 7891.591364,
+          "projection_ms": 2762.097734
+        }
+      }
+    }
+  ],
+  "quality_binary_sha256": {
+    "bf16": "357195821c395d40a10cfa9250b1dc5dc5412d843d6acfd092d48bc99693cb65",
+    "q8": "357195821c395d40a10cfa9250b1dc5dc5412d843d6acfd092d48bc99693cb65",
+    "q4": "81e76c5396404d483de508d77af779173656faaf30a4530be60caf9fc9a98770",
+    "q4-all": "81e76c5396404d483de508d77af779173656faaf30a4530be60caf9fc9a98770"
+  },
+  "performance_binary_sha256": {
+    "bf16": "81e76c5396404d483de508d77af779173656faaf30a4530be60caf9fc9a98770",
+    "q8": "81e76c5396404d483de508d77af779173656faaf30a4530be60caf9fc9a98770",
+    "q4": "81e76c5396404d483de508d77af779173656faaf30a4530be60caf9fc9a98770",
+    "q4-all": "81e76c5396404d483de508d77af779173656faaf30a4530be60caf9fc9a98770"
+  },
+  "kernel_equivalence": {
+    "passed": true,
+    "corpus_sha256": "8cf4d26bc03658563b6e20fcededd84e8fbf73143a8c14b20ef2b6c2c91d712d",
+    "original_binary_sha256": "357195821c395d40a10cfa9250b1dc5dc5412d843d6acfd092d48bc99693cb65",
+    "optimized_binary_sha256": "81e76c5396404d483de508d77af779173656faaf30a4530be60caf9fc9a98770",
+    "comparison": "Canonical JSON equality, including floating-point signed zero",
+    "modes": {
+      "q4": {
+        "requests": 160,
+        "responses_exact": true,
+        "logits_exact": true
+      },
+      "q4-all": {
+        "requests": 160,
+        "responses_exact": true,
+        "logits_exact": true
+      }
+    }
+  },
+  "dataset_sources": [
+    {
+      "url": "https://raw.githubusercontent.com/cardiffnlp/tweeteval/4fbd22cd78421f05b1ecdb4fc5725bc7a7bd8f66/datasets/emotion/test_text.txt",
+      "sha256": "7e1070f5d3e3fcece5bc73680bff9981e90d8f7b2f1009bfe7a01d059d1c6091",
+      "bytes": 132523
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cardiffnlp/tweeteval/4fbd22cd78421f05b1ecdb4fc5725bc7a7bd8f66/datasets/emotion/test_labels.txt",
+      "sha256": "245072348c711961785be6d395997f97cf7fcda3effeae7805664171dc75f913",
+      "bytes": 2842
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cardiffnlp/tweeteval/4fbd22cd78421f05b1ecdb4fc5725bc7a7bd8f66/datasets/emotion/mapping.txt",
+      "sha256": "656dea85d149716af96206ca19bec0d94e9dc6de3f5079f5c7c2a241ec76cadb",
+      "bytes": 34
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cardiffnlp/tweeteval/4fbd22cd78421f05b1ecdb4fc5725bc7a7bd8f66/datasets/sentiment/test_text.txt",
+      "sha256": "09a93a55c63fd93f97485ef7302889d7edb4091cd49733aa37da094f0bfa0675",
+      "bytes": 1156877
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cardiffnlp/tweeteval/4fbd22cd78421f05b1ecdb4fc5725bc7a7bd8f66/datasets/sentiment/test_labels.txt",
+      "sha256": "6afb4afe9374d1f983bcf9a7c79b108d0f37fdf020a83f30488309bed215db9d",
+      "bytes": 24568
+    },
+    {
+      "url": "https://raw.githubusercontent.com/cardiffnlp/tweeteval/4fbd22cd78421f05b1ecdb4fc5725bc7a7bd8f66/datasets/sentiment/mapping.txt",
+      "sha256": "c0572796fbe261d8ea5fd16c5061076fbba49bc69fc865d6abccaf60daacee24",
+      "bytes": 32
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/57ec275d8078af65b7731c2a98be812d844a6d6b/banking_data/test.csv",
+      "sha256": "d12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d",
+      "bytes": 239961
+    }
+  ],
+  "runtime": {
+    "architecture": "x86_64",
+    "kernel": "AVX2/FMA",
+    "threads": 3,
+    "resident_weights": true,
+    "warmup_rounds": 1,
+    "measured_rounds": 4
+  },
+  "validation": {
+    "reference_parity": {
+      "reference_cases": 2,
+      "max_absolute_error": 3.3197521374095373e-06,
+      "bound": 0.0001
+    },
+    "rust_tests": "12 focused native tests passed; feature gates checked with and without int8; browser SIMD build checked",
+    "python_tests": "11 quality/report tests passed"
+  },
+  "reproduction": {
+    "build": "cargo build --locked --release",
+    "prepare": "python3 scripts/pplx_flash/prepare_quality.py --output benchmark-runs/new-cpu-run/corpus.json",
+    "quality": "python3 scripts/pplx_flash/cpu_bench.py run --corpus benchmark-runs/new-cpu-run/corpus.json --output benchmark-runs/new-cpu-run --modes bf16 q8 q4 q4-all",
+    "performance": "python3 scripts/pplx_flash/cpu_bench.py run --corpus benchmark-runs/new-cpu-run/corpus.json --output benchmark-runs/new-cpu-run --performance --rounds 5 --modes bf16 q8 q4 q4-all",
+    "report": "python3 scripts/pplx_flash/cpu_bench.py summarize --corpus benchmark-runs/new-cpu-run/corpus.json --output benchmark-runs/new-cpu-run --modes bf16 q8 q4 q4-all",
+    "checkpoint": "Requires the pinned checkpoint at models/pplx-decider-flash-v1.2; choose a fresh output directory."
+  }
+}
