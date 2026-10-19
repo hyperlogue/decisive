@@ -36,6 +36,9 @@ impl Gpu {
     pub(crate) async fn checkpoint(mode: &str, profile: bool) -> Result<Self> {
         let reuse = mode.ends_with("-reuse");
         let mode = mode.strip_suffix("-reuse").unwrap_or(mode);
+        let requested_wide = mode == "q4-e4";
+        let grouped_float = requested_wide || mode == "q4-e4-baseline";
+        let mode = if ["q4-e4-int8", "q4-e4-baseline"].contains(&mode) { "q4-e4" } else { mode };
         ensure!(
             [
                 "bf16",
@@ -48,16 +51,21 @@ impl Gpu {
                 "int8-tuned",
                 "w8a8-f32",
                 "q4-fused",
-                "q4-buffered"
+                "q4-buffered",
+                "q4-e4",
+                "q4-e4-signed"
             ]
             .contains(&mode),
             "unknown checkpoint configuration"
         );
         let mut gpu = Self::with_options(mode != "bf16", profile).await?;
         gpu.reuse_weight_buffers = reuse;
+        let wide = requested_wide && gpu.device.device.limits().max_compute_workgroup_storage_size >= 16896;
         gpu.q4 = match mode {
             "q4-fused" => Some(q4::Mode::Fused),
             "q4-buffered" => Some(q4::Mode::Buffered),
+            "q4-e4" => Some(q4::Mode::Group64),
+            "q4-e4-signed" => Some(q4::Mode::Group64Signed),
             _ => None,
         };
         if mode == "bf16" {
@@ -104,13 +112,13 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             return Ok(gpu);
         }
         let fp16_mlp = mode.starts_with("hybrid");
-        let float_partials = mode.ends_with("f32");
+        let float_partials = grouped_float || mode.ends_with("f32");
         for (name, source) in [
-            ("int8_input", int8::quantize(false)),
+            ("int8_input", if gpu.grouped_q4() { grouped_q4::quantize() } else { int8::quantize(false) }),
             ("int8_weight", int8::quantize(true)),
             (
                 "int8_gemm",
-                if gpu.q4 == Some(q4::Mode::Fused) {
+                if wide { include_str!("grouped_q4_tuned.wgsl").into() } else if grouped_float { grouped_q4::float_gemm() } else if gpu.grouped_q4() { grouped_q4::gemm(gpu.q4==Some(q4::Mode::Group64)) } else if gpu.q4 == Some(q4::Mode::Fused) {
                     q4::gemm(false)
                 } else if float_partials {
                     int8::fp32_partials(false)
@@ -120,7 +128,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             ),
             (
                 "int8_raw",
-                if gpu.q4 == Some(q4::Mode::Fused) {
+                if wide { include_str!("grouped_q4_tuned.wgsl").into() } else if grouped_float { grouped_q4::float_gemm() } else if gpu.grouped_q4() { grouped_q4::gemm(gpu.q4==Some(q4::Mode::Group64)) } else if gpu.q4 == Some(q4::Mode::Fused) {
                     q4::gemm(true)
                 } else if float_partials {
                     int8::fp32_partials(true)
@@ -137,7 +145,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             fused: false,
             fp16_mlp,
             pure: !fp16_mlp,
-            tile: [64, 64],
+            tile: if wide { [64, 64] } else if grouped_float { [64, 32] } else { [64, 64] },
             float_partials,
         });
         if gpu.q4.is_some() {
@@ -191,11 +199,13 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         &mut self,
         tensors: &HashMap<String, Tensor>,
     ) -> Result<()> {
+        if self.grouped_q4() { return Ok(()); }
         let encoder = self.encode_checkpoint_weights(tensors)?;
         self.device.read(encoder, &self.dummy, 1).await?;
         Ok(())
     }
     pub(crate) fn prepare_queued_weights(&mut self, tensors: &HashMap<String, Tensor>) -> Result<()> {
+        if self.grouped_q4() { return Ok(()); }
         if self.int8.is_some() {
             let encoder = self.encode_checkpoint_weights(tensors)?;
             self.device.submit_commands(encoder);
@@ -247,6 +257,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         &mut self,
         tensors: &mut HashMap<String, Tensor>,
     ) -> Result<()> {
+        if self.grouped_q4() { return self.wait_idle().await; }
         ensure!(
             self.int8.as_ref().is_none_or(|state| state.pure),
             "resident weights currently support FP16, BF16 and all-INT8 projections"
@@ -276,6 +287,18 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             buffer.destroy();
         }
         Ok(())
+    }
+    pub(crate) async fn upload_resident(&self, bytes: &[u8], shape: Vec<usize>) -> Result<Tensor> {
+        let memory = self.device.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation = self.device.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let tensor = self.upload(bytes, shape);
+        let validation = validation.pop().await;
+        let memory = memory.pop().await;
+        if let Some(error) = validation.or(memory) {
+            if let Ok(tensor) = tensor { tensor.buffer.destroy(); }
+            anyhow::bail!("resident weight upload ({} bytes): {error}", bytes.len());
+        }
+        tensor
     }
     pub(crate) fn start_profile(&self) {
         if let Some(profile) = &self.device.profile {

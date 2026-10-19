@@ -84,5 +84,18 @@ class RequestTiming(unittest.TestCase):
         layer['compute_ms']=None;layer['queue_wait_ms']=1000
         with self.assertRaises(AssertionError):self.analyze(data)
 
+    def test_packed_grouped_q4_requires_complete_weight_reads(self):
+        data=report();modes={'int8':'q4-e4-serial','int8-tuned':'q4-e4'}
+        data['timing_scope']='prepacked-streamed-request';data['configuration'].update(modes=list(modes.values()),resident=False)
+        for startup in data['startup']:
+            startup.update(mode=modes[startup['mode']],prepacked_decoder_bytes=2009531392)
+        for run in data['runs']:
+            run.update(mode=modes[run['mode']],timing_scope=data['timing_scope'],decoder_weight_bytes_read=2009531392)
+            run['configuration']['resident']=False
+            run['adapter']['quantization']={'scheme':'q4-w4a8-e4-r4-g64'}
+        self.assertTrue(self.analyze(data)['confirmation'])
+        data['runs'][0]['decoder_weight_bytes_read']-=4
+        with self.assertRaises(AssertionError):self.analyze(data)
+
 
 if __name__=='__main__':unittest.main()

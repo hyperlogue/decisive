@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Mode { Fused, Buffered }
+pub(super) enum Mode { Fused, Buffered, Group64, Group64Signed }
 
 impl Gpu {
     pub(super) fn quantize_q4(&mut self, e: &mut CommandEncoder, input: &Buffer, rows: usize, k: usize) -> Result<Buffer> {
@@ -24,6 +24,13 @@ impl Gpu {
         Ok(buffer.clone())
     }
     pub(crate) fn q4_info(&self) -> serde_json::Value {
+        if self.grouped_q4() {
+            let float = self.int8.as_ref().is_some_and(|s|s.float_partials);
+            return serde_json::json!({"weight_bits":4,"activation_bits":8,"embedding_bits":4,"readout_bits":4,
+                "group_size":64,"scheme":"q4-w4a8-e4-r4-g64","q4_unpack":"workgroup-tile","weight_preprocessing":"offline",
+                "group_dot_arithmetic":if float{"fp32-exact-integer"}else{"int32"},
+                "packed_dot":if float{None}else{Some(if self.q4==Some(Mode::Group64){"unsigned-corrected"}else{"signed"})}});
+        }
         serde_json::json!({"weight_bits":if self.q4.is_some(){4}else if self.int8.is_some(){8}else{16},
             "q4_scheme":self.q4.map(|_| "symmetric-per-output-channel-absmax-round-even-[-7,7]"),
             "q4_unpack":self.q4.map(|m|if m==Mode::Fused{"workgroup-tile"}else{"reusable-matrix-buffer"}),

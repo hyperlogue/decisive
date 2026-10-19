@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pplx Flash · Phone benchmark</title>
+<style>
+*{box-sizing:border-box}body{font:16px/1.55 system-ui;margin:0;background:#f4f7f5;color:#19372e}main{max-width:760px;margin:40px auto;padding:0 20px}h1{font-size:30px;line-height:1.15}p{color:#466258}button{font:inherit;font-weight:600;border:0;border-radius:9px;padding:13px 16px;background:#176449;color:white;cursor:pointer}button:disabled{opacity:.4;cursor:default}.buttons{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}.secondary{background:#dce8e1;color:#19372e}progress{width:100%;height:12px}#status{min-height:50px}table{width:100%;border-collapse:collapse;background:white;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #dce8e1}th{font-size:13px;color:#466258}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;font-size:12px}details{margin-top:22px}.hint{font-size:14px}label{display:block;margin:14px 0}a{color:#176449}@media(max-width:480px){main{margin:28px auto}button{flex:1}th,td{padding:10px 5px;font-size:13px}}
+</style>
+<main>
+<h1>Forward pass on your phone</h1>
+<p>W4A8E4 · 32 layers · WebGPU</p>
+<p class="hint">Prepare downloads about 2.4 GB once and saves it in browser storage. Downloading, verification and shader setup are excluded from inference time. Keep Safari in the foreground.</p>
+<label>GPU weight storage <select id="residency"><option value="streaming">Streamed with double buffering</option><option value="resident">All decoder weights resident · 2.01 GB</option></select></label>
+<p class="hint">Resident mode keeps packed Q4 decoder weights on the GPU and excludes their one-time upload. Embedding rows and decision readout keep the same CPU path. Reload to change modes; downloaded weights remain cached.</p>
+<div class="buttons"><button id="prepare">Prepare model</button><button id="cancel" class="secondary" disabled>Pause download</button></div>
+<progress id="progress" max="1" value="0"></progress>
+<p id="status" role="status" aria-live="polite">Prepare the model, then choose an input length. No forward pass runs automatically.</p>
+<div class="buttons"><button data-tokens="256" disabled>Run 256</button><button data-tokens="512" disabled>Run 512</button><button data-tokens="1024" disabled>Run 1024</button></div>
+<label><input id="warmup" type="checkbox"> Mark next pass as warmup (excluded from median)</label>
+<p class="hint">Each click runs one exact-length sequence. Run a warmup for each length, then take three measurements. Timings include local weight reads, uploads, activation quantization, all layers and decision readout.</p>
+<table><thead><tr><th>Tokens</th><th>Runs</th><th>Last</th><th>Median</th><th>Tokens/s</th></tr></thead><tbody id="rows"></tbody></table>
+<div class="buttons"><button id="download" class="secondary" disabled>Save JSON report</button><button id="copy" class="secondary" disabled>Copy report</button></div>
+<p id="export-status" class="hint"></p>
+<details><summary>Run history and details</summary><pre id="details">No runs yet.</pre></details>
+</main>
+<script type="module" src="./phone.js"></script>
+</html>

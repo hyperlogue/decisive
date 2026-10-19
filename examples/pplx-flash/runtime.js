@@ -2,6 +2,7 @@ import {createEmbeddingCache} from './embedding-cache.js';
 
 export async function loadFlash(api, source, progress = () => {}, backend = 'wasm', configuration = null) {
   const initializationStart=performance.now(),resident=configuration?.resident===true;
+  const packed=configuration?.mode?.startsWith('q4-e4')===true;
   if (!["wasm", "webgpu"].includes(backend)) throw Error("Unknown Pplx backend");
   const files=['model-00001-of-00002.safetensors','model-00002-of-00002.safetensors'];
   let transferred=0;
@@ -22,18 +23,26 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
     transferred+=bytes.length;return bytes;
   };
   const headers=[];
+  let packedManifest;
+  if(packed){
+    packedManifest=JSON.parse(new TextDecoder().decode(await read('packed-q4-e4.json')));
+    if(packedManifest.schema_version!==1||packedManifest.scheme!=='q4-w4a8-e4-r4-g64'||packedManifest.revision!=='6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d'||packedManifest.layers.length!==32||packedManifest.embedding_row_bytes!==1440)throw Error('Invalid packed Q4-E4 manifest');
+    headers.push(...packedManifest.headers);
+    for(const layer of packedManifest.layers){if(!/^q4-e4-layer-\d{2}\.bin$/.test(layer.file))throw Error('Invalid packed layer path');files.push(layer.file);}
+  }else{
   for(const name of files){
     const prefix=await read(name,0,8);
     const n=Number(new DataView(prefix.buffer).getBigUint64(0,true));
     if(!Number.isSafeInteger(n)||n>16*1024*1024)throw Error('Invalid safetensors header');
     headers.push(new TextDecoder().decode(await read(name,8,8+n)));
   }
-  const data=await Promise.all(['config.json','decision_config.json','joint_config.json','tokenizer.json','readout.safetensors'].map(n=>read(n)));
+  }
+  const data=await Promise.all(['config.json','decision_config.json','joint_config.json','tokenizer.json',packed?packedManifest.readout:'readout.safetensors'].map(n=>read(n)));
   if (backend === "webgpu" && !api.PplxFlashWebGpu) throw Error("Build this package with the webgpu feature");
   if(configuration && (backend!=="webgpu" || !api.PplxFlashWebGpu?.createConfigured))throw Error('Configured checkpoint checks require a kernel-checks WebGPU build');
   const model=configuration ? await api.PplxFlashWebGpu.createConfigured(...data,JSON.stringify(headers),configuration.mode,Boolean(configuration.profile)) : backend === "webgpu" ? await api.PplxFlashWebGpu.create(...data,JSON.stringify(headers)) : new api.PplxFlashModel(...data,JSON.stringify(headers));
   let weightBuffers=null;
-  if(backend==='webgpu'&&!resident&&configuration?.doubleBuffering!==false){
+  if(backend==='webgpu'&&!resident&&configuration?.doubleBuffering!==false&&configuration?.mode!=='q4-e4-serial'){
     try{
       if(typeof model.weightBuffers!=='function')throw Error('GPU double buffering requires an updated Wasm build');
       weightBuffers=model.weightBuffers();
@@ -42,12 +51,12 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
   let adapter=backend === "webgpu" ? JSON.parse(model.adapter()) : null;
   const tensor=async name=>{const r=JSON.parse(model.tensorRange(name));return read(files[r.file],r.start,r.end);};
   const embedding=JSON.parse(model.tensorRange('language_model.embed_tokens.weight'));
-  const embeddingCache=createEmbeddingCache(id=>read(files[embedding.file],embedding.start+id*5120,embedding.start+(id+1)*5120));
-  const norm=await tensor('language_model.norm.weight');
+  const embeddingCache=packed?createEmbeddingCache(id=>read(packedManifest.embedding,id*1440,(id+1)*1440),{rowBytes:1440}):createEmbeddingCache(id=>read(files[embedding.file],embedding.start+id*5120,embedding.start+(id+1)*5120));
+  const norm=packed?await read(packedManifest.norm):await tensor('language_model.norm.weight');
   let worker,sequence=0,busy=false;
   const pendingReads=new Map();
   function loadLayer(layer,prefetch) {
-    const ranges=JSON.parse(model.ranges(layer));
+    const ranges=packed?packedManifest.layers[layer].tensors.map(t=>({...t,file:layer+2})):JSON.parse(model.ranges(layer));
     const groups=[...new Set(ranges.map(r=>r.file))].map(file=>{
       const group=ranges.filter(r=>r.file===file);
       return {group,file,lo:Math.min(...group.map(r=>r.start)),hi:Math.max(...group.map(r=>r.end))};
@@ -76,23 +85,25 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
       for(let layer=0;layer<32;layer++){
         progress(`Preparing weights ${layer+1}/32`);
         for(const {group,lo,bytes} of await pending){
-          for(const r of group)model.stageTensor(layer,r.name,bytes.subarray(r.start-lo,r.end-lo));
+          for(const r of group)await model.stageTensor(layer,r.name,bytes.subarray(r.start-lo,r.end-lo));
         }
         if(layer<31)pending=loadLayer(layer+1,true);
         await model.cacheLayer(layer);
       }
       adapter=JSON.parse(model.adapter());
       if(adapter.weight_residency!=='all-decoder-layers')throw Error('Resident weight preparation did not complete');
+      if(packed&&adapter.resident_decoder_weight_bytes!==packedManifest.decoder_bytes)throw Error('Resident packed weight allocation mismatch');
     }catch(error){worker?.terminate();embeddingCache.clear();model.free();throw error;}
   }
   const startup={elapsed_ms:performance.now()-initializationStart,bytes_read:transferred,
+    prepacked_decoder_bytes:packedManifest?.decoder_bytes??0,
     weight_residency:resident?'all-decoder-layers':weightBuffers?'two-layer-banks':'one-layer',
     resident_decoder_weight_bytes:adapter?.resident_decoder_weight_bytes??0};
   return {model,startup,dispose(){if(busy)throw Error("Inference is still running");worker?.terminate();embeddingCache.clear();weightBuffers?.free();model.free();},async predict(request,maxLength=2048,prefetch=true){
     if(busy)throw Error("One request per model instance may run at a time");
     busy=true;
     try{
-    const queued=Boolean(weightBuffers&&prefetch&&configuration?.queued!==false&&model.supportsQueued?.());
+    const queued=Boolean((resident||weightBuffers&&prefetch)&&configuration?.queued!==false&&model.supportsQueued?.());
     const start=performance.now(),chunks=JSON.parse(model.prepare(JSON.stringify(request),maxLength)),timings=[];
     const prepare_ms=performance.now()-start;let embedding_ms=0,readout_ms=0,decoder_weight_bytes_read=0;
     const embedding_cache={hits:0,misses:0,retained_bytes:0,capacity_bytes:0};
@@ -103,7 +114,30 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
       embedding_cache.hits+=cached.hits;embedding_cache.misses+=cached.misses;
       embedding_cache.retained_bytes=cached.retained_bytes;embedding_cache.capacity_bytes=cached.capacity_bytes;
       embedding_ms+=performance.now()-embeddingStart;
-      if(queued){
+      if(queued&&resident){
+        let pending=0;
+        const first=timings.length;
+        const collect=async()=>{
+          const completed=JSON.parse(await model.waitLayer());
+          Object.assign(timings[first+completed.layer],completed);
+          pending--;
+        };
+        try{
+          for(let layer=0;layer<32;layer++){
+            progress(`Layer ${layer+1}/32`);
+            if(pending===2)await collect();
+            const phases=JSON.parse(model.queueLayer());
+            pending++;
+            timings.push({chunk:first/32,layer,...phases,pack_ms:0,read_ms:0,
+              read_wait_ms:0,upload_enqueue_ms:0,queue_wait_ms:0});
+          }
+          while(pending)await collect();
+        }catch(error){
+          try{await model.abortQueued();}
+          catch(cleanup){throw new AggregateError([error,cleanup],'Resident inference and cleanup failed');}
+          throw error;
+        }
+      }else if(queued){
         let reading=loadLayer(0,true),lookahead=null,pending=0;
         const first=timings.length;
         const collect=async()=>{
@@ -218,8 +252,9 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
     }
     const response=JSON.parse(model.result());
     const elapsed_ms=performance.now()-start;
-    return {response,backend,adapter:queued?{...adapter,timing:'queued execution: host encoding and completion collection; per-layer GPU compute time unavailable'}:adapter,elapsed_ms,request_ms:resident?elapsed_ms:null,
-      timing_scope:resident?'warm-request':'streamed-request-diagnostic',decoder_weight_bytes_read,
+    if(packed&&(decoder_weight_bytes_read!==(resident?0:packedManifest.decoder_bytes*chunks.length)||timings.some(l=>l.pack_ms!=null&&l.pack_ms!==0)))throw Error('Packed request accounting mismatch');
+    return {response,backend,adapter:queued?{...adapter,timing:'queued execution: host encoding and completion collection; per-layer GPU compute time unavailable'}:adapter,elapsed_ms,request_ms:resident||packed?elapsed_ms:null,
+      timing_scope:resident?'warm-request':packed?'prepacked-streamed-request':'streamed-request-diagnostic',decoder_weight_bytes_read,
       prepare_ms,embedding_ms,embedding_cache,readout_ms,bytes_read:transferred-before,prefetch:!resident&&prefetch,fetch_worker:!resident&&prefetch,
       double_buffered:Boolean(weightBuffers&&prefetch),weight_buffers:weightBuffers?JSON.parse(weightBuffers.diagnostics()):null,
       queued_execution:queued,max_in_flight_layers:queued?2:1,

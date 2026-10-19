@@ -1,6 +1,11 @@
 mod backbone;
 mod cpu;
 mod input;
+mod packed_q4;
+#[cfg(feature = "cpu")]
+mod export_q4;
+#[cfg(feature = "cpu")]
+pub use export_q4::export_webgpu_q4;
 #[cfg(all(feature = "cpu", feature = "int8"))]
 mod int8;
 #[cfg(feature = "cpu")]
@@ -47,6 +52,7 @@ pub struct Engine {
     config: Value,
     input: input::Encoder,
     readout: Vec<f32>,
+    packed_readout: Vec<u8>,
     #[cfg(all(feature = "cpu", feature = "int8"))]
     quantized_readout: Option<int8::Matrix>,
     #[cfg(feature = "cpu")]
@@ -116,12 +122,16 @@ impl Engine {
             "unsupported position limit"
         );
         let input = input::Encoder::new(decision, joint, tokenizer)?;
-        let w = Weights::from_bytes(readout)?;
-        let readout = w.get("weight", &[255, D])?;
+        let (readout, packed_readout) = if readout.len() == packed_q4::size(255, D)? {
+            (Vec::new(), readout.to_vec())
+        } else {
+            (Weights::from_bytes(readout)?.get("weight", &[255, D])?, Vec::new())
+        };
         Ok(Self {
             config,
             input,
             readout,
+            packed_readout,
             #[cfg(all(feature = "cpu", feature = "int8"))]
             quantized_readout: None,
             #[cfg(feature = "cpu")]
@@ -140,6 +150,12 @@ impl Engine {
         for (i, (&marker, &count)) in chunk.markers.iter().zip(&chunk.counts).enumerate() {
             let at = if self.prune_last { i } else { marker };
             let x = &work.hidden[at * D..(at + 1) * D];
+            if !self.packed_readout.is_empty() {
+                let values = packed_q4::project(&self.packed_readout, D, x, count)?;
+                ensure!(values.iter().all(|v| v.is_finite()), "non-finite packed logits");
+                logits.push(values);
+                continue;
+            }
             let values: Vec<f32> = self
                 .readout
                 .chunks_exact(D)

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pplx Flash · Single forward pass</title>
+<style>
+body{font:16px/1.6 system-ui;max-width:800px;margin:48px auto;padding:0 24px;color:#18372f;background:#f3f6f4}
+h1{line-height:1.2}button{font:inherit;font-weight:600;padding:14px 22px;border:0;border-radius:8px;background:#165f4b;color:white;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}p{margin:16px 0}.muted{color:#526b63}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;background:white;padding:16px;border-radius:8px}
+#status{min-height:26px}#result{font-weight:600}details{margin-top:20px}
+</style>
+<h1>One forward pass</h1>
+<p>512 input tokens · W4A8E4 · WebGPU · streamed weights with double buffering</p>
+<p class="muted">Wait for Ready, start your profiler, then click the button. Each click runs one request through all 32 layers. There are no automatic warmups or repeats.</p>
+<button id="run" disabled>Run 512-token forward pass</button>
+<p id="status" role="status" aria-live="polite">Preparing model and shaders…</p>
+<p id="result"></p>
+<p class="muted">Initialization is separate from the run. Each pass includes weight reads/uploads, activation quantization and readout. Internal GPU timestamp profiling is off so queued execution stays enabled.</p>
+<details><summary>Input request</summary><pre id="input"></pre></details>
+<details><summary>Last run details</summary><pre id="details">No forward pass has run.</pre></details>
+<script type="module">
+const run=document.querySelector('#run'),status=document.querySelector('#status');
+const worker=new Worker('/forward-worker.js',{type:'module'});
+let prepared=false,running=false,number=0,hidden=false;
+document.addEventListener('visibilitychange',()=>{if(running&&document.hidden)hidden=true;});
+worker.onmessage=({data})=>{
+  if(data.type==='ready')worker.postMessage({type:'prepare'});
+  else if(data.type==='progress')status.textContent=data.message;
+  else if(data.type==='prepared'){
+    prepared=true;run.disabled=false;
+    status.textContent=`Ready · ${data.tokens} tokens · one sequence · no forward pass has run`;
+    document.querySelector('#input').textContent=JSON.stringify(data.request,null,2);
+  }else if(data.type==='result'){
+    performance.mark(`pplx-512-${number}-end`);
+    performance.measure(`Pplx 512-token forward pass ${number}`,`pplx-512-${number}-start`,`pplx-512-${number}-end`);
+    console.timeStamp?.(`Pplx 512-token forward pass ${number}: end`);
+    running=false;run.disabled=false;
+    window.lastRun={...data.result,page_hidden:hidden,run:number};
+    status.textContent='Ready · click to run one more forward pass';
+    document.querySelector('#result').textContent=`Pass ${number} complete · ${data.result.response.usage.input_tokens} tokens · ${data.result.layers.length} layers · ${(data.result.elapsed_ms/1000).toFixed(3)} s${hidden?' · tab was hidden':''}`;
+    document.querySelector('#details').textContent=JSON.stringify(window.lastRun,null,2);
+  }else if(data.type==='error'){
+    running=false;prepared=data.prepared;run.disabled=!prepared;
+    status.textContent=data.message;
+  }
+};
+worker.onerror=event=>{running=false;run.disabled=true;status.textContent=event.message||'Worker failed';};
+run.onclick=()=>{
+  if(!prepared||running)return;
+  running=true;hidden=document.hidden;number++;run.disabled=true;
+  document.querySelector('#result').textContent='';status.textContent='Running one forward pass…';
+  performance.mark(`pplx-512-${number}-start`);
+  console.timeStamp?.(`Pplx 512-token forward pass ${number}: start`);
+  worker.postMessage({type:'run',number});
+};
+</script>
+</html>

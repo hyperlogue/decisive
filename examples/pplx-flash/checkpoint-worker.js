@@ -4,8 +4,9 @@ import {loadFlash} from '/runtime/runtime.js';
 self.postMessage({type:'ready'});
 self.onmessage=async({data})=>{
   const resident=data.resident!==false;
+  const packed=data.modes?.every(m=>m.startsWith('q4-e4'));
   const report={schema_version:2,experiment:'pplx-checkpoint-phase-v1',completed:false,configuration:data,
-    timing_scope:resident?'warm-request':'streamed-request-diagnostic',startup:[],runs:[]};
+    timing_scope:resident?'warm-request':packed?'prepacked-streamed-request':'streamed-request-diagnostic',startup:[],runs:[]};
   const engines=[];
   const progress=message=>self.postMessage({type:'progress',message});
   const median=values=>{const s=[...values].sort((a,b)=>a-b);return(s[(s.length-1)>>1]+s[s.length>>1])/2;};
@@ -38,6 +39,7 @@ self.onmessage=async({data})=>{
     if(hash!==metadata.build.wasm_sha256)throw Error('Wasm checksum mismatch');
     const wasm=await init({module_or_path:bytes});report.wasm_sha256=hash;
     if(data.q4_check){progress('Checking Q4 codes and raw dots against CPU');report.kernel_check=JSON.parse(await api.pplxFlashWebGpuQ4Check());if(!report.kernel_check.passed)throw Error('Q4 kernel check failed');}
+    if(data.grouped_q4_check){progress('Checking group-64 Q4 kernels against CPU');report.kernel_check=JSON.parse(await api.pplxFlashWebGpuGroupedQ4Check());if(!report.kernel_check.passed)throw Error('Grouped Q4 kernel check failed');}
     const reference=await(await fetch('/fixtures/reference.json')).json();
     for(const mode of data.modes){
       progress(`Initializing ${mode}`);
@@ -57,6 +59,7 @@ self.onmessage=async({data})=>{
         request.state=words.slice(0,lo).join(' ');
         while(length(request.state)<1024){const next=request.state+' x';if(length(next)>1024)break;request.state=next;}
       }
+      if(data.capture_requests){report.requests??=[];report.requests.push({fixture,request});}
       for(let round=-data.warmups;round<data.rounds;round++){
         const order=round%2?[...engines].reverse():engines;
         for(const {mode,engine} of order){
@@ -73,7 +76,7 @@ self.onmessage=async({data})=>{
             run.reference=compare(result.response,expected.response);
             if(run.reference.max_absolute_difference>1e-4||run.reference.categorical_mismatches)throw Error(`BF16 reference mismatch: ${JSON.stringify(run.reference)}`);
           }
-          report.runs.push(run);progress(`${report.active}: ${(result.elapsed_ms/1000).toFixed(2)} s ${resident?'per request; model preparation excluded':'streaming diagnostic; not a warm-request benchmark'}`);
+          report.runs.push(run);progress(`${report.active}: ${(result.elapsed_ms/1000).toFixed(2)} s ${resident?'per request; model preparation excluded':packed?'per request; packed reads/uploads included':'streaming diagnostic; not a warm-request benchmark'}`);
         }
       }
     }

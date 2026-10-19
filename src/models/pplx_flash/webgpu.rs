@@ -10,6 +10,8 @@ mod streaming_check;
 mod int8;
 #[cfg(feature = "kernel-checks")]
 pub(super) mod q4;
+#[cfg(feature = "kernel-checks")]
+pub(super) mod grouped_q4;
 mod profile;
 mod shaders;
 #[cfg(feature = "kernel-checks")]
@@ -69,6 +71,16 @@ pub(super) struct Gpu {
     q4_expansion: Option<Buffer>,
 }
 impl Gpu {
+    pub(crate) fn grouped_q4(&self) -> bool {
+        #[cfg(feature = "kernel-checks")]
+        {
+            matches!(self.q4, Some(q4::Mode::Group64 | q4::Mode::Group64Signed))
+        }
+        #[cfg(not(feature = "kernel-checks"))]
+        {
+            false
+        }
+    }
     pub async fn new() -> Result<Self> {
         Self::with_precision(false).await
     }
@@ -204,6 +216,8 @@ impl Gpu {
         };
         #[cfg(feature = "kernel-checks")]
         let projection_precision = match &self.int8 {
+            Some(state) if self.grouped_q4() && state.float_partials => "w4a8-fp32-group-dots",
+            Some(_) if self.grouped_q4() => "w4a8-packed-int32-group-dots",
             Some(state) if state.pure && state.float_partials => {
                 "w8a8-exact-fp32-partials-int32-outer-no-fp16"
             }
@@ -257,7 +271,7 @@ impl Gpu {
             self.device.bytes(bytes, "BF16 weight")?
         };
         #[cfg(feature = "kernel-checks")]
-        let buffer = if self.fp16_projections && shape.len() == 2 {
+        let buffer = if self.fp16_projections && shape.len() == 2 && !self.grouped_q4() {
             let converted = self.checkpoint_fp16(&buffer, bytes.len())?;
             if self.reuse_weight_buffers {
                 self.retain_weight_buffer(buffer);
@@ -365,7 +379,9 @@ impl Gpu {
         let int8_tile = [64, 64];
         #[cfg(feature = "kernel-checks")]
         let int8_tile = self.int8.as_ref().map_or(int8_tile, |s| s.tile);
-        let groups = if name == "int8_input" || name == "int8_weight" || name == "q4_weight" {
+        let groups = if name == "int8_input" && self.grouped_q4() {
+            [params[0], params[2] / 64, 1]
+        } else if name == "int8_input" || name == "int8_weight" || name == "q4_weight" {
             [params[0], 1, 1]
         } else if name == "int8_gemm" || name == "int8_raw" {
             [
@@ -417,6 +433,12 @@ impl Gpu {
         output: usize,
     ) -> Result<Buffer> {
         let y = self.empty(n * output)?;
+        #[cfg(feature = "kernel-checks")]
+        if self.grouped_q4() {
+            let input_buffer = self.int8_input(e, x, n, input)?;
+            self.run(e, "int8_gemm", [&input_buffer, w, &self.dummy, &y], &[n, output, input], 0)?;
+            return Ok(y);
+        }
         #[cfg(feature = "kernel-checks")]
         if let Some(weight) = self
             .int8

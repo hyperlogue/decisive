@@ -53,7 +53,8 @@ impl Device {
             adapter.features().contains(features),
             "required WebGPU precision is unavailable"
         );
-        let limits = wgpu::Limits::default();
+        let mut limits = wgpu::Limits::default();
+        limits.max_compute_workgroup_storage_size = adapter.limits().max_compute_workgroup_storage_size.min(32768);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Pplx Flash inference"),

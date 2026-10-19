@@ -22,12 +22,12 @@ struct Bank {
     spare: Vec<wgpu::Buffer>,
 }
 impl Bank {
-    fn assign(&mut self, layer: usize, ranges: &[Range]) {
+    fn assign(&mut self, layer: usize, ranges: &[Range], packed: bool) -> Result<()> {
         // Retain only buffers needed by this layer's shape. In particular, a
         // linear-attention/full-attention transition cannot grow a bank's pool.
         let mut needed = HashMap::<u64, usize>::new();
         for r in ranges {
-            *needed.entry(r.end - r.start).or_default() += 1;
+            *needed.entry(weight_bytes(r, packed)?).or_default() += 1;
         }
         self.spare.retain(|b| {
             if let Some(n) = needed.get_mut(&b.size()) {
@@ -41,6 +41,7 @@ impl Bank {
         });
         self.layer = Some(layer);
         self.ready = false;
+        Ok(())
     }
     fn retire(&mut self) {
         for b in self.spare.drain(..) {
@@ -109,6 +110,15 @@ pub struct WeightBuffers {
     queue: wgpu::Queue,
     pub(super) index: Rc<Index>,
     state: Rc<RefCell<State>>,
+    packed: bool,
+}
+
+fn weight_bytes(range: &Range, packed: bool) -> Result<u64> {
+    if packed && range.shape.len() == 2 {
+        Ok(crate::pplx_flash::packed_q4::size(range.shape[0], range.shape[1])? as u64)
+    } else {
+        Ok(range.end - range.start)
+    }
 }
 
 #[wasm_bindgen(js_class=PplxFlashWeightBuffers)]
@@ -175,7 +185,8 @@ impl WeightBuffers {
         serde_json::json!({"banks":2,"raw_weight_bytes":s.banks.iter().map(Bank::bytes).sum::<u64>(),
             "peak_raw_weight_bytes":s.peak_bytes,"tensor_uploads":s.uploads,"reused_buffers":s.reused,
             "bank_layers":s.banks.iter().map(|b| b.layer).collect::<Vec<_>>(),
-            "computing_layer":s.computing,"scope":"raw BF16 weight banks; excludes active converted/quantized weights and activations",
+            "computing_layer":s.computing,"packed_q4":self.packed,"weight_bytes":s.banks.iter().map(Bank::bytes).sum::<u64>(),
+            "peak_weight_bytes":s.peak_bytes,"scope":if self.packed {"prepacked Q4 group-64 weight banks; excludes activations"} else {"raw BF16 weight banks; excludes active converted/quantized weights and activations"},
             "in_flight_layers":s.in_flight,"peak_in_flight_layers":s.peak_in_flight,
             "overlap":"uploads enqueued after compute submission and before its completion wait; hardware overlap is implementation-dependent"}).to_string()
     }
@@ -189,7 +200,7 @@ impl WeightBuffers {
             "tensor belongs to another layer"
         );
         ensure!(
-            bytes.len() as u64 == range.end - range.start && bytes.len() % 4 == 0,
+            bytes.len() as u64 == weight_bytes(&range, self.packed)? && bytes.len() % 4 == 0,
             "invalid tensor byte length"
         );
         let limits = self.device.limits();
@@ -211,7 +222,7 @@ impl WeightBuffers {
         );
         let bank = &mut s.banks[layer % 2];
         if bank.layer.is_none() {
-            bank.assign(layer, &self.index.layer(layer)?);
+            bank.assign(layer, &self.index.layer(layer)?, self.packed)?;
         }
         ensure!(
             bank.layer == Some(layer) && !bank.ready,
@@ -347,11 +358,12 @@ impl Gpu {
             queue: self.device.queue.clone(),
             index,
             state: Rc::new(RefCell::new(State::default())),
+            packed: self.grouped_q4(),
         }
     }
     pub(crate) fn prepare_uploaded(&self, tensor: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "kernel-checks")]
-        if self.fp16_projections && tensor.shape.len() == 2 {
+        if self.fp16_projections && tensor.shape.len() == 2 && !self.grouped_q4() {
             return Ok(Tensor {
                 shape: tensor.shape.clone(),
                 buffer: self.checkpoint_fp16(&tensor.buffer, tensor.buffer.size() as usize)?,

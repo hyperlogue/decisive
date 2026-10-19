@@ -9,6 +9,8 @@ def trace(report):
         report={**report,'profile_enabled':report['configuration'].get('profile',False),
                 'scope':('Actual checkpoint warm-request GPU passes; one-time weight preparation is excluded. Runtime Q4 expansion is included.'
                          if report.get('timing_scope')=='warm-request' else
+                         'Prepacked W4A8E4 streaming; preprocessing excluded, repeated reads/uploads and activation quantization included.'
+                         if report.get('timing_scope')=='prepacked-streamed-request' else
                          'Actual checkpoint streaming diagnostic; local weight reads, uploads and preparation appear between compute intervals.'),
                 'runs':[{**r,'id':r['mode'],'rows':r['response']['usage']['input_tokens']} for r in report['runs']]}
     if not report.get('completed') or not report.get('profile_enabled'):

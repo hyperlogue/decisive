@@ -52,7 +52,10 @@ impl Gpu {
             k % 4 == 0 && k <= 32768,
             "INT8 reduction must be a multiple of four, at most 32768"
         );
-        let size = rows * (k / 4 + 2);
+        let size = if self.grouped_q4() {
+            ensure!(k % 64 == 0 && !weight, "grouped weights must be prepacked");
+            rows * (k / 64) * 17
+        } else { rows * (k / 4 + 2) };
         let reused = if weight {
             self.int8.as_ref().and_then(|state| {
                 let mut pool = state.pool.borrow_mut();

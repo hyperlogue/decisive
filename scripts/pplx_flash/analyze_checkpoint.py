@@ -9,6 +9,7 @@ ROOT=Path(__file__).resolve().parents[2]
 
 def precision(mode):
     mode=mode.removesuffix('-reuse')
+    if mode in ['q4-e4-reference','q4-e4-baseline','q4-e4-wide','q4-e4','q4-e4-serial','q4-e4-unsigned','q4-e4-signed','q4-e4-int8','q4-e4-f32']:return 'w4a8-e4-g64'
     if mode=='bf16':return 'bf16'
     if mode.startswith('fp16'):return 'fp16'
     if mode.startswith('hybrid'):return 'hybrid'
@@ -24,6 +25,10 @@ def analyze(path):
     assert 1<=len(modes)<=2 and len(set(modes))==len(modes)
     assert len(report['runs'])==len(modes)*len(spec['fixtures'])*(spec['warmups']+spec['rounds'])
     resident=report.get('timing_scope')=='warm-request'
+    packed=report.get('timing_scope')=='prepacked-streamed-request'
+    if packed:
+        assert spec.get('resident') is False
+        assert all(s['prepacked_decoder_bytes']==2009531392 for s in report['startup'])
     if resident:
         assert spec.get('resident',True) is True
         assert {s['mode'] for s in report['startup']}==set(modes)
@@ -43,6 +48,13 @@ def analyze(path):
             assert run['decoder_weight_bytes_read']==0
             assert run['adapter']['weight_residency']=='all-decoder-layers'
             assert all(l['pack_ms']==0 and l['read_ms']==0 for l in run['layers'])
+        elif packed:
+            assert run['request_ms']==run['elapsed_ms'] and run['configuration']['resident'] is False
+            assert run['decoder_weight_bytes_read']==2009531392*run['response']['usage']['sequences']
+            assert run['adapter']['quantization']['scheme']=='q4-w4a8-e4-r4-g64'
+            assert all(l['pack_ms'] in [0,None] for l in run['layers'])
+            if run.get('double_buffered'):assert run['weight_buffers']['packed_q4']
+            assert not any(d['kernel'] in ['q4_weight','int8_weight','checkpoint_fp16'] for l in run['layers'] for d in (l.get('profile') or {}).get('dispatches',[]))
         else:
             assert run['bytes_read']>=7_140_099_072*run['response']['usage']['sequences']
         assert run['elapsed_ms']>0 and math.isfinite(run['elapsed_ms'])
@@ -59,15 +71,15 @@ def analyze(path):
             assert sum(l[f] for l in run['layers'] for f in fields)<=run['elapsed_ms']+2
         else:
             assert sum(l['compute_ms']+l['pack_ms'] for l in run['layers'])<=run['elapsed_ms']+2
-        if precision(run['mode']) in ['w8a8','w4a8']:
+        if precision(run['mode']) in ['w8a8','w4a8','w4a8-e4-g64']:
             assert not any(d['kernel'] in ['gemm','mlp_fused','gemm_small','mlp_small']
                            for layer in run['layers'] for d in (layer.get('profile') or {}).get('dispatches',[])), 'FP16 projection fallback'
     result={'source':str(path.relative_to(ROOT)),'verified_runs':len(report['runs']),
             'checkpoint_revision':report['metadata']['revision'],'synthetic_weights':False,
-            'timing_scope':'warm-request' if resident else 'streamed-request-diagnostic',
+            'timing_scope':'warm-request' if resident else 'prepacked-streamed-request' if packed else 'streamed-request-diagnostic',
             'startup':report.get('startup',[]),
             'hidden_timings_provisional':any(r.get('page_hidden') for r in report['runs'] if not r['warmup']),
-            'confirmation':resident and spec['rounds']>=3 and spec['warmups']>=1 and not spec.get('profile'),'cases':[]}
+            'confirmation':(resident or packed) and spec['rounds']>=3 and spec['warmups']>=1 and not spec.get('profile'),'cases':[]}
     for fixture in spec['fixtures']:
         runs=[r for r in report['runs'] if r['fixture']==fixture and not r['warmup']]
         baseline={r['round']:r for r in runs if r['mode']==modes[0]}
