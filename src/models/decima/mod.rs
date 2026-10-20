@@ -346,6 +346,46 @@ impl Model {
         head: &[u8],
         options: Options,
     ) -> Result<Self> {
+        Self::from_bytes_with(
+            config,
+            encoder_config,
+            tokenizer,
+            encoder,
+            head,
+            options,
+            true,
+        )
+    }
+    // Loads everything but the word embeddings, which the WebGPU model keeps on the GPU; the
+    // encoder checkpoint may omit them. The result must not run on the CPU.
+    #[cfg(all(feature = "webgpu", feature = "wasm"))]
+    pub(super) fn without_vocabulary(
+        config: &[u8],
+        encoder_config: &[u8],
+        tokenizer: &[u8],
+        encoder: &[u8],
+        head: &[u8],
+        options: Options,
+    ) -> Result<Self> {
+        Self::from_bytes_with(
+            config,
+            encoder_config,
+            tokenizer,
+            encoder,
+            head,
+            options,
+            false,
+        )
+    }
+    fn from_bytes_with(
+        config: &[u8],
+        encoder_config: &[u8],
+        tokenizer: &[u8],
+        encoder: &[u8],
+        head: &[u8],
+        options: Options,
+        vocabulary: bool,
+    ) -> Result<Self> {
         ensure!(
             options.precision == Precision::F32 || cfg!(feature = "int8"),
             "INT8 requires the int8 Cargo feature"
@@ -431,7 +471,11 @@ impl Model {
             config,
             options,
             avx2,
-            embeddings: embedding::Embeddings::load(&w, options.precision)?,
+            embeddings: if vocabulary {
+                embedding::Embeddings::load(&w, options.precision)?
+            } else {
+                embedding::Embeddings::Float(Vec::new())
+            },
             positions: w.get("embeddings.position_embeddings.weight", &[512, D])?,
             types: w.get("embeddings.token_type_embeddings.weight", &[2, D])?,
             embedding_norm: Norm::load(&w, "embeddings.LayerNorm", D, 1e-12)?,

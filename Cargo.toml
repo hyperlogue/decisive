@@ -58,7 +58,7 @@ libloading = { version = "0.8", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
-web-sys = { version = "0.3", optional = true, features = ["Window", "Response", "Cache", "CacheStorage"] }
+web-sys = { version = "0.3", optional = true, features = ["Window", "Response", "Cache", "CacheStorage", "Blob"] }
 wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl", "webgpu"], optional = true }
 futures-channel = { version = "0.3", optional = true }
 pollster = { version = "0.4", optional = true }

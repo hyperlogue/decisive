@@ -2,48 +2,32 @@ mod device;
 mod readout;
 mod shaders;
 use super::{D, Kind, Model as CpuModel, Precision, Question, cpu, input};
-use crate::length::{Band, Rules};
-use anyhow::{Result, ensure};
-use device::Device;
-use serde::{Deserialize, Serialize};
+use anyhow::{Context, Result, ensure};
+use device::{Bindings, Device, Frame, Kernel};
 use serde_json::{Value, json};
+use shaders::{Accumulate, Epilogue, SLICE};
 use std::{collections::VecDeque, sync::Arc};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Plan {
-    pub matrix_tile: usize,
-    pub attention_query_tile: usize,
-}
-impl Plan {
-    fn validate(&self) -> Result<()> {
-        ensure!(
-            matches!(self.matrix_tile, 8 | 16),
-            "Decima GPU matrix tile must be 8 or 16"
-        );
-        ensure!(
-            matches!(self.attention_query_tile, 8 | 16 | 32 | 64),
-            "Decima GPU attention tile must be 8, 16, 32 or 64"
-        );
-        Ok(())
-    }
-}
-pub fn default_rules() -> Rules<Plan> {
-    Rules::new(
-        vec![Band {
-            through: 64,
-            settings: Plan {
-                matrix_tile: 16,
-                attention_query_tile: 16,
-            },
-        }],
-        Plan {
-            matrix_tile: 16,
-            attention_query_tile: 32,
-        },
-    )
-    .unwrap()
-}
+const FF: usize = 1536;
+// Questions are batched into groups: their states share one encoder pass and the
+// cross-attention memory, and their pooled vectors are read back together.
+const STATE_ROWS: usize = 1024;
+const READOUT_ROWS: usize = 2048;
+// Choice rows scored together; a chunk's uncached choices are encoded alongside the states.
+const CHUNK_ROWS: usize = 512;
+const ENCODER_ROWS: usize = STATE_ROWS + CHUNK_ROWS;
+const MAX_CHOICES: usize = 255;
+const VOCABULARY: usize = 250037;
+const VOCABULARY_SPLIT: usize = 1 << 16;
+const ROW_BYTES: usize = D * 4 + 4;
+// GEMM workgroup tiles as (rows, rows per thread), for small, medium and large batches.
+const GEMM_TILES: [(usize, usize); 3] = [(16, 2), (32, 4), (32, 8)];
+// Long residual GEMMs up to this many rows split k across workgroups.
+const SPLIT_ROWS: usize = 192;
+// Queries per encoder attention tile.
+const ENCODER_QUERIES: usize = 16;
+
+// Weights are stored transposed, [input × output], so GEMM tiles load along the output.
 struct Linear {
     input: usize,
     output: usize,
@@ -51,73 +35,92 @@ struct Linear {
     bias: wgpu::Buffer,
 }
 struct Norm {
-    width: usize,
     eps: f32,
     weight: wgpu::Buffer,
     bias: wgpu::Buffer,
 }
-struct Attention {
-    q: Linear,
-    k: Linear,
-    v: Linear,
-    o: Linear,
-}
 struct EncoderLayer {
-    attention: Attention,
+    qkv: Linear,
+    o: Linear,
     n1: Norm,
     n2: Norm,
     ff1: Linear,
     ff2: Linear,
 }
 struct ScorerLayer {
-    self_attn: Attention,
-    cross_attn: Attention,
+    qkv: Linear,
+    o: Linear,
+    cross_q: Linear,
+    cross_o: Linear,
     n1: Norm,
     n2: Norm,
     n3: Norm,
     ff1: Linear,
     ff2: Linear,
 }
-struct Pipelines {
-    gemm8: wgpu::ComputePipeline,
-    gemm16: wgpu::ComputePipeline,
-    norm: wgpu::ComputePipeline,
-    pointwise: wgpu::ComputePipeline,
-    scores: wgpu::ComputePipeline,
-    softmax: wgpu::ComputePipeline,
-    values: wgpu::ComputePipeline,
+struct Kernels {
+    embed: Kernel,
+    // GEMM_TILES × [bias, gelu, residual]
+    gemm: [[Kernel; 3]; 3],
+    // Residual GEMMs over k > SLICE: sliced one-pass for the medium and large tiles, split-K
+    // partials for the small and medium tiles, and the ordered reduce of the partials.
+    sliced: [Kernel; 2],
+    split: [Kernel; 2],
+    reduce: Kernel,
+    norm: Kernel,
+    encoder_attention: Kernel,
+    scorer_attention: Kernel,
+    mean: Kernel,
+    copy: Kernel,
 }
 pub struct Model {
     device: Device,
     config: super::Config,
     input: input::Input,
-    embeddings: super::embedding::Embeddings,
-    positions: Vec<f32>,
-    types: Vec<f32>,
+    // Word embeddings in VOCABULARY_SPLIT-row buffers, then the type row, embedding norm weight
+    // and bias, and position rows.
+    vocabulary: [wgpu::Buffer; 4],
+    prelude: wgpu::Buffer,
+    embedding_eps: f32,
     readout: readout::Readout,
     encoder: Vec<EncoderLayer>,
     scorer: Vec<ScorerLayer>,
-    embedding_norm: Norm,
+    // Cross-attention keys and values of every scorer layer, side by side.
+    memory: Linear,
     out_norm: Norm,
-    pipelines: Pipelines,
-    dummy: wgpu::Buffer,
-    rules: Rules<Plan>,
+    kernels: Kernels,
+    // Scorer attention query tile: 32 where workgroup memory allows, else 16.
+    queries: usize,
     identity: Arc<()>,
 }
+
+struct Entry {
+    ids: Vec<u32>,
+    rows: Vec<u32>,
+    request: u64,
+}
+// Each Session owns its GPU scratch, parameter ring and choice cache. Cached choice encodings
+// live as rows of one buffer, so batches gather them by index.
 pub struct Session {
     identity: Option<Arc<()>>,
-    cache: VecDeque<(Vec<u32>, wgpu::Buffer)>,
+    arena: Option<Arena>,
+    cache: VecDeque<Entry>,
+    free: Vec<u32>,
     bytes: usize,
     limit: usize,
+    request: u64,
     pub choice_cache_hits: u64,
 }
 impl Default for Session {
     fn default() -> Self {
         Self {
             identity: None,
+            arena: None,
             cache: VecDeque::new(),
+            free: Vec::new(),
             bytes: 0,
             limit: 32 * 1024 * 1024,
+            request: 0,
             choice_cache_hits: 0,
         }
     }
@@ -126,35 +129,112 @@ impl Session {
     pub fn clear_cache(&mut self) {
         self.cache.clear();
         self.bytes = 0;
+        self.free = self
+            .arena
+            .as_ref()
+            .map_or(Vec::new(), |a| (0..a.cache_rows as u32).rev().collect());
     }
     pub fn set_cache_bytes(&mut self, bytes: usize) {
         self.limit = bytes;
+        self.arena = None;
         self.clear_cache();
     }
     pub fn cache_bytes(&self) -> usize {
         self.bytes
     }
 }
-struct Buffers {
+struct Arena {
     hidden: wgpu::Buffer,
-    norm: wgpu::Buffer,
-    q: wgpu::Buffer,
-    k: wgpu::Buffer,
-    v: wgpu::Buffer,
-    context: wgpu::Buffer,
     update: wgpu::Buffer,
+    partials: wgpu::Buffer,
+    qkv: wgpu::Buffer,
+    context: wgpu::Buffer,
     ff: wgpu::Buffer,
-    activated: wgpu::Buffer,
-    scores: wgpu::Buffer,
-    probabilities: wgpu::Buffer,
+    memory: wgpu::Buffer,
+    stream: [wgpu::Buffer; 2],
+    normed: wgpu::Buffer,
+    cache: wgpu::Buffer,
+    cache_rows: usize,
+    tables: wgpu::Buffer,
+    table_capacity: usize,
+    readout: wgpu::Buffer,
+    staging: wgpu::Buffer,
+    bindings: Bindings,
 }
-fn parameters(values: &[u32]) -> [u32; 16] {
-    let mut p = [0; 16];
-    p[..values.len()].copy_from_slice(values);
-    p
+impl Arena {
+    fn new(device: &Device, limit: usize) -> Result<Self> {
+        let max_rows = device.device.limits().max_storage_buffer_binding_size as usize / (D * 4);
+        let cache_rows = (limit / ROW_BYTES).min(max_rows - CHUNK_ROWS);
+        let table_capacity = 32 * 1024;
+        let readout = READOUT_ROWS * D;
+        Ok(Self {
+            hidden: device.storage(ENCODER_ROWS * D, "Decima hidden")?,
+            update: device.storage(ENCODER_ROWS * D, "Decima update")?,
+            partials: device.storage(FF / SLICE * SPLIT_ROWS * D, "Decima split partials")?,
+            qkv: device.storage(ENCODER_ROWS * 3 * D, "Decima qkv")?,
+            context: device.storage(ENCODER_ROWS * D, "Decima context")?,
+            ff: device.storage(ENCODER_ROWS * FF, "Decima feed-forward")?,
+            memory: device.storage(STATE_ROWS * 4 * D, "Decima state memory")?,
+            stream: [
+                device.storage(CHUNK_ROWS * D, "Decima scorer stream")?,
+                device.storage(CHUNK_ROWS * D, "Decima scorer stream")?,
+            ],
+            normed: device.storage(CHUNK_ROWS * D, "Decima scorer norm")?,
+            // Rows past cache_rows hold this chunk's choices that do not fit the cache.
+            cache: device.storage((cache_rows + CHUNK_ROWS) * D, "Decima choice cache")?,
+            cache_rows,
+            tables: device.storage(table_capacity, "Decima tables")?,
+            table_capacity,
+            readout: device.storage(readout, "Decima readout vectors")?,
+            staging: device.empty(
+                readout * 4,
+                wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                "Decima result",
+            )?,
+            bindings: Bindings::new(),
+        })
+    }
 }
+
+// Questions whose states are encoded together. The first chunk encodes every state; each
+// chunk encodes its uncached choices and then scores its choices.
+struct Group {
+    questions: Vec<Placed>,
+    chunks: Vec<Chunk>,
+    state_rows: usize,
+    readout_rows: usize,
+}
+// Where a question's state sits in the encoder batch and its pooled vectors in the readout.
+struct Placed {
+    state: usize,
+    tokens: usize,
+    readout: usize,
+    choices: usize,
+}
+#[derive(Default)]
+struct Chunk {
+    // (first encoder row, token ids) of each sequence in the encoder batch
+    encode: Vec<(usize, Vec<u32>)>,
+    // (encoder row, cache row) for newly cached or overflow choices
+    scatter: Vec<[u32; 2]>,
+    // (question, readout row of the choice's encoder mean, cache rows)
+    choices: Vec<(usize, usize, Vec<u32>)>,
+}
+
 impl Model {
-    pub async fn from_cpu(source: CpuModel) -> Result<Self> {
+    pub async fn from_cpu(mut source: CpuModel) -> Result<Self> {
+        let super::embedding::Embeddings::Float(vocabulary) = std::mem::replace(
+            &mut source.embeddings,
+            super::embedding::Embeddings::Float(Vec::new()),
+        ) else {
+            anyhow::bail!("WebGPU requires float Decima embeddings");
+        };
+        let model = Self::without_vocabulary(source).await?;
+        model.write_vocabulary(0, bytemuck::cast_slice(&vocabulary))?;
+        Ok(model)
+    }
+    // Builds the model with zeroed word embeddings; fill them with `write_vocabulary`.
+    async fn without_vocabulary(source: CpuModel) -> Result<Self> {
         ensure!(
             source.precision() == Precision::F32,
             "WebGPU currently requires float Decima projections"
@@ -163,88 +243,118 @@ impl Model {
         let scope = device
             .device
             .push_error_scope(wgpu::ErrorFilter::Validation);
-        let entries: Vec<_> = (0..5)
-            .map(|binding| wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: if binding == 4 {
-                        wgpu::BufferBindingType::Uniform
-                    } else {
-                        wgpu::BufferBindingType::Storage {
-                            read_only: binding != 3,
-                        }
-                    },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+        let gemm = |(rows, per_thread): (usize, usize)| {
+            [Epilogue::Bias, Epilogue::Gelu, Epilogue::Residual].map(|e| {
+                device.kernel(
+                    "Decima GEMM",
+                    shaders::gemm(rows, per_thread, e, Accumulate::Whole),
+                    3 + (e == Epilogue::Residual) as usize,
+                    1,
+                )
             })
-            .collect();
-        let layout = device
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Decima compute bindings"),
-                entries: &entries,
-            });
-        let pipeline_layout =
-            device
-                .device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Decima compute layout"),
-                    bind_group_layouts: &[Some(&layout)],
-                    immediate_size: 0,
-                });
-        let pipeline = |name: &str, source: String| {
-            let module = device
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(name),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
-            device
-                .device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some(name),
-                    layout: Some(&pipeline_layout),
-                    module: &module,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                })
         };
-        let pipelines = Pipelines {
-            gemm8: pipeline("Decima GEMM 8", shaders::gemm(8)),
-            gemm16: pipeline("Decima GEMM 16", shaders::gemm(16)),
-            norm: pipeline("Decima norm", shaders::source(shaders::NORM)),
-            pointwise: pipeline("Decima pointwise", shaders::source(shaders::POINTWISE)),
-            scores: pipeline("Decima attention scores", shaders::source(shaders::SCORES)),
-            softmax: pipeline("Decima softmax", shaders::source(shaders::SOFTMAX)),
-            values: pipeline("Decima attention values", shaders::source(shaders::VALUES)),
+        let long = |(rows, per_thread): (usize, usize), accumulate| {
+            let reads = if accumulate == Accumulate::Split {
+                2
+            } else {
+                4
+            };
+            let code = shaders::gemm(rows, per_thread, Epilogue::Residual, accumulate);
+            device.kernel("Decima long GEMM", code, reads, 1)
+        };
+        let storage = device.device.limits().max_compute_workgroup_storage_size as usize;
+        let queries = if shaders::attention_tiled_storage(64, 32, 16) <= storage {
+            32
+        } else {
+            16
+        };
+        let kernels = Kernels {
+            embed: device.kernel("Decima embedding", shaders::embed(), 6, 1),
+            gemm: GEMM_TILES.map(gemm),
+            sliced: [
+                long(GEMM_TILES[1], Accumulate::Sliced),
+                long(GEMM_TILES[2], Accumulate::Sliced),
+            ],
+            split: [
+                long(GEMM_TILES[0], Accumulate::Split),
+                long(GEMM_TILES[1], Accumulate::Split),
+            ],
+            reduce: device.kernel("Decima reduce", shaders::reduce(), 3, 1),
+            norm: device.kernel("Decima norm", shaders::norm(), 3, 1),
+            encoder_attention: device.kernel(
+                "Decima attention",
+                shaders::attention_rows(32, ENCODER_QUERIES, 4, 16),
+                3,
+                1,
+            ),
+            scorer_attention: device.kernel(
+                "Decima attention",
+                shaders::attention_tiled(64, queries, 16),
+                3,
+                1,
+            ),
+            mean: device.kernel("Decima mean", shaders::mean(), 2, 1),
+            copy: device.kernel("Decima copy", shaders::copy(), 2, 1),
         };
         if let Some(error) = scope.pop().await {
             anyhow::bail!("Decima GPU pipeline: {error}");
         }
-        let embedding_norm = Norm::upload(&device, &source.embedding_norm)?;
-        let out_norm = Norm::upload(&device, &source.out_norm)?;
+        let linear = |parts: Vec<cpu::Linear>| Linear::upload(&device, parts);
         let encoder = source
             .encoder
             .into_iter()
-            .map(|l| EncoderLayer::upload(&device, l))
+            .map(|l| {
+                Ok(EncoderLayer {
+                    qkv: linear(vec![l.q, l.k, l.v])?,
+                    o: linear(vec![l.o])?,
+                    n1: Norm::upload(&device, &l.n1)?,
+                    n2: Norm::upload(&device, &l.n2)?,
+                    ff1: linear(vec![l.ff1])?,
+                    ff2: linear(vec![l.ff2])?,
+                })
+            })
             .collect::<Result<_>>()?;
+        let mut memory = Vec::new();
         let scorer = source
             .scorer
             .into_iter()
-            .map(|l| ScorerLayer::upload(&device, l))
-            .collect::<Result<_>>()?;
-        let dummy = device.buffer(&[0.], "Decima unused input")?;
+            .map(|l| {
+                memory.push(l.cross_attn.k);
+                memory.push(l.cross_attn.v);
+                Ok(ScorerLayer {
+                    qkv: linear(vec![l.self_attn.q, l.self_attn.k, l.self_attn.v])?,
+                    o: linear(vec![l.self_attn.o])?,
+                    cross_q: linear(vec![l.cross_attn.q])?,
+                    cross_o: linear(vec![l.cross_attn.o])?,
+                    n1: Norm::upload(&device, &l.n1)?,
+                    n2: Norm::upload(&device, &l.n2)?,
+                    n3: Norm::upload(&device, &l.n3)?,
+                    ff1: linear(vec![l.ff1])?,
+                    ff2: linear(vec![l.ff2])?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(scorer.len() * 2 * D <= 4 * D, "Decima scorer memory layout");
+        let memory = linear(memory)?;
+        let n = &source.embedding_norm;
+        ensure!(
+            source.types.len() >= D && n.weight.len() == D && source.positions.len() == 512 * D,
+            "Decima embedding shapes"
+        );
+        let prelude: Vec<f32> =
+            [&source.types[..D], &n.weight, &n.bias, &source.positions].concat();
+        let split = |i: usize| {
+            let rows = VOCABULARY_SPLIT.min(VOCABULARY - i * VOCABULARY_SPLIT);
+            device.storage(rows * D, "Decima vocabulary")
+        };
+        let vocabulary = [split(0)?, split(1)?, split(2)?, split(3)?];
         Ok(Self {
-            device,
+            vocabulary,
+            prelude: device.buffer(&prelude, "Decima embedding prelude")?,
+            embedding_eps: n.eps,
+            out_norm: Norm::upload(&device, &source.out_norm)?,
             config: source.config,
             input: source.input,
-            embeddings: source.embeddings,
-            positions: source.positions,
-            types: source.types,
             readout: readout::Readout::new(
                 source.score,
                 source.ord_g,
@@ -254,232 +364,207 @@ impl Model {
             )?,
             encoder,
             scorer,
-            embedding_norm,
-            out_norm,
-            pipelines,
-            dummy,
-            rules: default_rules(),
+            memory,
+            kernels,
+            queries,
+            device,
             identity: Arc::new(()),
         })
+    }
+    // Writes word embedding rows, little-endian f32, starting at row `first`.
+    fn write_vocabulary(&self, first: usize, bytes: &[u8]) -> Result<()> {
+        let width = D * 4;
+        ensure!(
+            bytes.len() % width == 0 && first + bytes.len() / width <= VOCABULARY,
+            "Decima vocabulary range"
+        );
+        let (mut row, mut rest) = (first, bytes);
+        while !rest.is_empty() {
+            let (split, within) = (row / VOCABULARY_SPLIT, row % VOCABULARY_SPLIT);
+            let rows = (VOCABULARY_SPLIT - within).min(rest.len() / width);
+            let (head, tail) = rest.split_at(rows * width);
+            self.device
+                .queue
+                .write_buffer(&self.vocabulary[split], (within * width) as u64, head);
+            (row, rest) = (row + rows, tail);
+        }
+        Ok(())
     }
     pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
         &self.device.info
     }
-    pub fn set_length_rules(&mut self, rules: Rules<Plan>) -> Result<()> {
-        rules.validate(Plan::validate)?;
-        self.rules = rules;
-        self.identity = Arc::new(());
-        Ok(())
-    }
-    fn run(
+
+    fn gemm(
         &self,
-        e: &mut wgpu::CommandEncoder,
-        pipeline: &wgpu::ComputePipeline,
-        x: &wgpu::Buffer,
-        w: &wgpu::Buffer,
-        b: &wgpu::Buffer,
-        y: &wgpu::Buffer,
-        p: &[u32],
-        groups: [u32; 3],
-    ) -> Result<()> {
-        self.device
-            .dispatch(e, pipeline, &[x, w, b, y], &parameters(p), groups)
-    }
-    fn linear(
-        &self,
-        e: &mut wgpu::CommandEncoder,
+        f: &mut Frame,
+        a: &mut Arena,
         l: &Linear,
         x: &wgpu::Buffer,
+        residual: Option<&wgpu::Buffer>,
+        gelu: bool,
         y: &wgpu::Buffer,
         rows: usize,
-        plan: Plan,
     ) -> Result<()> {
-        let t = plan.matrix_tile;
-        self.run(
-            e,
-            if t == 8 {
-                &self.pipelines.gemm8
-            } else {
-                &self.pipelines.gemm16
-            },
-            x,
-            &l.weight,
-            &l.bias,
-            y,
-            &[rows as u32, l.output as u32, l.input as u32],
-            [l.output.div_ceil(t) as u32, rows.div_ceil(t) as u32, 1],
-        )
+        // Short tiles keep small batches spread over the GPU; more rows per thread pay off once
+        // the grid fills it (measured on M3 Safari and Dawn). All tiles give identical results.
+        let tile = match rows {
+            0..=32 => 0,
+            33..320 => 1,
+            _ => 2,
+        };
+        let groups = |tile: usize| {
+            [
+                (l.output / 64) as u32,
+                rows.div_ceil(GEMM_TILES[tile].0) as u32,
+                1,
+            ]
+        };
+        let p = [rows as u32, l.output as u32, l.input as u32];
+        if l.input > SLICE {
+            // Long products: few rows split k over more workgroups, then reduce in slice order.
+            let r = residual.context("long Decima projections must have a residual")?;
+            ensure!(
+                !gelu && l.input % SLICE == 0 && l.input <= FF && l.output <= D,
+                "Decima long projection shape"
+            );
+            if rows > SPLIT_ROWS {
+                let kernel = &self.kernels.sliced[tile - 1];
+                return f.dispatch(
+                    &self.device,
+                    &mut a.bindings,
+                    kernel,
+                    &[x, &l.weight, &l.bias, r, y],
+                    &p,
+                    groups(tile),
+                );
+            }
+            let tile = (rows > 32) as usize;
+            let slices = l.input / SLICE;
+            let [g0, g1, _] = groups(tile);
+            let partials = a.partials.clone();
+            f.dispatch(
+                &self.device,
+                &mut a.bindings,
+                &self.kernels.split[tile],
+                &[x, &l.weight, &partials],
+                &p,
+                [g0, g1, slices as u32],
+            )?;
+            let count = (rows * l.output / 4).div_ceil(64) as u32;
+            return f.dispatch(
+                &self.device,
+                &mut a.bindings,
+                &self.kernels.reduce,
+                &[&partials, &l.bias, r, y],
+                &[rows as u32, l.output as u32, slices as u32],
+                [count, 1, 1],
+            );
+        }
+        let kernels = &self.kernels.gemm[tile];
+        match residual {
+            Some(r) => f.dispatch(
+                &self.device,
+                &mut a.bindings,
+                &kernels[2],
+                &[x, &l.weight, &l.bias, r, y],
+                &p,
+                groups(tile),
+            ),
+            None => f.dispatch(
+                &self.device,
+                &mut a.bindings,
+                &kernels[gelu as usize],
+                &[x, &l.weight, &l.bias, y],
+                &p,
+                groups(tile),
+            ),
+        }
     }
     fn norm(
         &self,
-        e: &mut wgpu::CommandEncoder,
-        l: &Norm,
+        f: &mut Frame,
+        a: &mut Arena,
+        n: &Norm,
         x: &wgpu::Buffer,
         y: &wgpu::Buffer,
         rows: usize,
     ) -> Result<()> {
-        self.run(
-            e,
-            &self.pipelines.norm,
-            x,
-            &l.weight,
-            &l.bias,
-            y,
-            &[rows as u32, l.width as u32, l.eps.to_bits()],
-            [rows.div_ceil(64) as u32, 1, 1],
+        f.dispatch(
+            &self.device,
+            &mut a.bindings,
+            &self.kernels.norm,
+            &[x, &n.weight, &n.bias, y],
+            &[n.eps.to_bits()],
+            [rows as u32, 1, 1],
         )
     }
-    fn add(
-        &self,
-        e: &mut wgpu::CommandEncoder,
-        x: &wgpu::Buffer,
-        w: &wgpu::Buffer,
-        y: &wgpu::Buffer,
-        n: usize,
-    ) -> Result<()> {
-        self.run(
-            e,
-            &self.pipelines.pointwise,
-            x,
-            w,
-            &self.dummy,
-            y,
-            &[(n * D) as u32, 0],
-            [(n * D).div_ceil(64) as u32, 1, 1],
-        )
-    }
-    fn gelu(
-        &self,
-        e: &mut wgpu::CommandEncoder,
-        x: &wgpu::Buffer,
-        y: &wgpu::Buffer,
-        elements: usize,
-    ) -> Result<()> {
-        self.run(
-            e,
-            &self.pipelines.pointwise,
-            x,
-            &self.dummy,
-            &self.dummy,
-            y,
-            &[elements as u32, 4],
-            [elements.div_ceil(64) as u32, 1, 1],
-        )
-    }
-    fn mean(
-        &self,
-        e: &mut wgpu::CommandEncoder,
-        x: &wgpu::Buffer,
-        y: &wgpu::Buffer,
-        rows: usize,
-        offset: usize,
-    ) -> Result<()> {
-        self.run(
-            e,
-            &self.pipelines.pointwise,
-            x,
-            &self.dummy,
-            &self.dummy,
-            y,
-            &[D as u32, 5, D as u32, rows as u32, offset as u32],
-            [D.div_ceil(64) as u32, 1, 1],
-        )
-    }
+    // `strides`: (q stride, q offset, kv stride, k offset, v offset); tiles start at `table`.
     fn attention(
         &self,
-        e: &mut wgpu::CommandEncoder,
+        f: &mut Frame,
+        a: &mut Arena,
+        kernel: &Kernel,
         q: &wgpu::Buffer,
-        k: &wgpu::Buffer,
-        v: &wgpu::Buffer,
-        s: &Buffers,
-        nq: usize,
-        nk: usize,
+        kv: &wgpu::Buffer,
+        y: &wgpu::Buffer,
+        strides: [usize; 5],
         heads: usize,
-        plan: Plan,
+        table: usize,
+        tiles: usize,
     ) -> Result<()> {
-        for first in (0..nq).step_by(plan.attention_query_tile) {
-            let rows = plan.attention_query_tile.min(nq - first);
-            let p = [
-                nk as u32,
-                heads as u32,
-                (D / heads) as u32,
-                rows as u32,
-                first as u32,
-            ];
-            self.run(
-                e,
-                &self.pipelines.scores,
-                q,
-                k,
-                &self.dummy,
-                &s.scores,
-                &p,
-                [(rows * heads * nk).div_ceil(64) as u32, 1, 1],
-            )?;
-            self.run(
-                e,
-                &self.pipelines.softmax,
-                &s.scores,
-                &self.dummy,
-                &self.dummy,
-                &s.probabilities,
-                &[(rows * heads) as u32, nk as u32],
-                [(rows * heads).div_ceil(64) as u32, 1, 1],
-            )?;
-            self.run(
-                e,
-                &self.pipelines.values,
-                &s.probabilities,
-                v,
-                &self.dummy,
-                &s.context,
-                &p,
-                [(rows * D).div_ceil(64) as u32, 1, 1],
-            )?;
+        if tiles == 0 {
+            return Ok(());
         }
-        Ok(())
+        let scale = 1. / ((D / heads) as f32).sqrt();
+        let [qs, qo, kvs, ko, vo] = strides.map(|v| v as u32);
+        f.dispatch(
+            &self.device,
+            &mut a.bindings,
+            kernel,
+            &[q, kv, &a.tables.clone(), y],
+            &[qs, qo, kvs, ko, vo, D as u32, scale.to_bits(), table as u32],
+            [tiles as u32, heads as u32, 1],
+        )
     }
-    fn encode(&self, e: &mut wgpu::CommandEncoder, ids: &[u32]) -> Result<wgpu::Buffer> {
-        let n = ids.len();
-        ensure!(
-            n > 0 && n <= 512 && ids.iter().all(|&id| (id as usize) < 250037),
-            "invalid Decima tokens"
-        );
-        let plan = *self.rules.select(n);
-        let mut embedding = vec![0.; n * D];
-        for (p, &id) in ids.iter().enumerate() {
-            let row = &mut embedding[p * D..(p + 1) * D];
-            self.embeddings.row(id as usize, row);
-            for i in 0..D {
-                row[i] = (row[i] + self.types[i]) + self.positions[p * D + i];
-            }
+    fn rows_op(
+        &self,
+        f: &mut Frame,
+        a: &mut Arena,
+        kernel: &Kernel,
+        x: &wgpu::Buffer,
+        y: &wgpu::Buffer,
+        table: usize,
+        count: usize,
+    ) -> Result<()> {
+        if count == 0 {
+            return Ok(());
         }
-        let source = self.device.buffer(&embedding, "Decima embedded input")?;
-        let s = Buffers::new(&self.device, n, n, plan.attention_query_tile)?;
-        self.norm(e, &self.embedding_norm, &source, &s.hidden, n)?;
-        for l in &self.encoder {
-            self.linear(e, &l.attention.q, &s.hidden, &s.q, n, plan)?;
-            self.linear(e, &l.attention.k, &s.hidden, &s.k, n, plan)?;
-            self.linear(e, &l.attention.v, &s.hidden, &s.v, n, plan)?;
-            self.attention(e, &s.q, &s.k, &s.v, &s, n, n, 12, plan)?;
-            self.linear(e, &l.attention.o, &s.context, &s.update, n, plan)?;
-            self.add(e, &s.hidden, &s.update, &s.norm, n)?;
-            self.norm(e, &l.n1, &s.norm, &s.hidden, n)?;
-            self.linear(e, &l.ff1, &s.hidden, &s.ff, n, plan)?;
-            self.gelu(e, &s.ff, &s.activated, n * 1536)?;
-            self.linear(e, &l.ff2, &s.activated, &s.update, n, plan)?;
-            self.add(e, &s.hidden, &s.update, &s.norm, n)?;
-            self.norm(e, &l.n2, &s.norm, &s.hidden, n)?;
-        }
-        Ok(s.hidden)
+        let tables = a.tables.clone();
+        f.dispatch(
+            &self.device,
+            &mut a.bindings,
+            kernel,
+            &[x, &tables, y],
+            &[table as u32],
+            [count as u32, 1, 1],
+        )
     }
+
     pub async fn decide(
         &self,
         state: &str,
         q: &Question,
         session: &mut Session,
     ) -> Result<Vec<f32>> {
-        let result = self.decide_inner(state, q, session).await;
+        Ok(self.decide_many(&[(state, q)], session).await?.remove(0))
+    }
+    // Scores several questions in as few GPU passes as capacity allows.
+    pub async fn decide_many(
+        &self,
+        items: &[(&str, &Question)],
+        session: &mut Session,
+    ) -> Result<Vec<Vec<f32>>> {
+        let result = self.decide_inner(items, session).await;
         if result.is_err() {
             session.clear_cache();
         }
@@ -487,123 +572,471 @@ impl Model {
     }
     async fn decide_inner(
         &self,
-        state: &str,
-        q: &Question,
+        items: &[(&str, &Question)],
         session: &mut Session,
-    ) -> Result<Vec<f32>> {
-        ensure!((2..=255).contains(&q.choices.len()), "need 2–255 choices");
-        if q.kind == Kind::Score {
-            ensure!(q.choices.len() <= 10, "score allows at most 10 levels");
-        }
+    ) -> Result<Vec<Vec<f32>>> {
         if !session
             .identity
             .as_ref()
             .is_some_and(|id| Arc::ptr_eq(id, &self.identity))
         {
-            session.clear_cache();
+            session.arena = None;
             session.identity = Some(self.identity.clone());
         }
+        if session.arena.is_none() {
+            session.arena = Some(Arena::new(&self.device, session.limit)?);
+            session.clear_cache();
+        }
         let c = &self.config;
-        let body = if c.question_in_state {
-            format!("{}\n{state}", q.text)
-        } else {
-            state.into()
-        };
-        let text = format!("{}{}", c.state_prefix, input::normalize(&body, &q.lang));
-        let ids = self.input.ids(&text)?;
-        ensure!(
-            ids.len() <= self.input.max_state,
-            "STATE_TRUNCATED: state + question is {} tokens; maximum {}",
-            ids.len(),
-            self.input.max_state
-        );
-        let nk = ids.len();
-        let state_plan = *self.rules.select(nk);
-        let mut e = self.device.encoder();
-        let state_h = self.encode(&mut e, &ids)?;
-        let rows = self
-            .input
-            .choices(q, &c.choice_prefix, c.question_in_choices, c.choice_fit)?;
-        let readout = self
-            .device
-            .empty((1 + 2 * rows.len()) * D, "Decima readout vectors")?;
-        self.mean(&mut e, &state_h, &readout, nk, 0)?;
-        let mut memory = Vec::new();
-        for l in &self.scorer {
-            let k = self.device.empty(nk * D, "Decima state keys")?;
-            let v = self.device.empty(nk * D, "Decima state values")?;
-            self.linear(&mut e, &l.cross_attn.k, &state_h, &k, nk, state_plan)?;
-            self.linear(&mut e, &l.cross_attn.v, &state_h, &v, nk, state_plan)?;
-            memory.push((k, v));
-        }
-        for (index, ids) in rows.into_iter().enumerate() {
-            let n = ids.len();
-            let plan = *self.rules.select(n);
-            let choice = if let Some(i) = session.cache.iter().position(|(key, _)| key == &ids) {
-                let entry = session.cache.remove(i).unwrap();
-                let buffer = entry.1.clone();
-                session.cache.push_back(entry);
-                session.choice_cache_hits += 1;
-                buffer
-            } else {
-                let buffer = self.encode(&mut e, &ids)?;
-                let bytes = n * (D * 4 + 4);
-                if bytes <= session.limit {
-                    while session.bytes + bytes > session.limit {
-                        if let Some((key, _)) = session.cache.pop_front() {
-                            session.bytes -= key.len() * (D * 4 + 4);
-                        }
-                    }
-                    session.bytes += bytes;
-                    session.cache.push_back((ids, buffer.clone()));
-                }
-                buffer
-            };
-            self.mean(&mut e, &choice, &readout, n, (1 + 2 * index) * D)?;
-            let mut s = Buffers::new(
-                &self.device,
-                n,
-                n.max(nk),
-                plan.attention_query_tile
-                    .max(state_plan.attention_query_tile),
-            )?;
-            // Scorer mutations must not alias the cached choice encoding.
-            e.copy_buffer_to_buffer(&choice, 0, &s.hidden, 0, (n * D * 4) as u64);
-            for (l, (mk, mv)) in self.scorer.iter().zip(&memory) {
-                self.norm(&mut e, &l.n1, &s.hidden, &s.norm, n)?;
-                self.linear(&mut e, &l.self_attn.q, &s.norm, &s.q, n, plan)?;
-                self.linear(&mut e, &l.self_attn.k, &s.norm, &s.k, n, plan)?;
-                self.linear(&mut e, &l.self_attn.v, &s.norm, &s.v, n, plan)?;
-                self.attention(&mut e, &s.q, &s.k, &s.v, &s, n, n, 6, plan)?;
-                self.linear(&mut e, &l.self_attn.o, &s.context, &s.update, n, plan)?;
-                self.add(&mut e, &s.hidden, &s.update, &s.norm, n)?;
-                std::mem::swap(&mut s.hidden, &mut s.norm);
-                self.norm(&mut e, &l.n2, &s.hidden, &s.norm, n)?;
-                self.linear(&mut e, &l.cross_attn.q, &s.norm, &s.q, n, plan)?;
-                self.attention(&mut e, &s.q, mk, mv, &s, n, nk, 6, state_plan)?;
-                self.linear(&mut e, &l.cross_attn.o, &s.context, &s.update, n, plan)?;
-                self.add(&mut e, &s.hidden, &s.update, &s.norm, n)?;
-                std::mem::swap(&mut s.hidden, &mut s.norm);
-                self.norm(&mut e, &l.n3, &s.hidden, &s.norm, n)?;
-                self.linear(&mut e, &l.ff1, &s.norm, &s.ff, n, plan)?;
-                self.gelu(&mut e, &s.ff, &s.activated, n * 1536)?;
-                self.linear(&mut e, &l.ff2, &s.activated, &s.update, n, plan)?;
-                self.add(&mut e, &s.hidden, &s.update, &s.norm, n)?;
-                std::mem::swap(&mut s.hidden, &mut s.norm);
+        let mut prepared = Vec::with_capacity(items.len());
+        for &(state, q) in items {
+            ensure!(
+                (2..=MAX_CHOICES).contains(&q.choices.len()),
+                "need 2–255 choices"
+            );
+            if q.kind == Kind::Score {
+                ensure!(q.choices.len() <= 10, "score allows at most 10 levels");
             }
-            self.norm(&mut e, &self.out_norm, &s.hidden, &s.norm, n)?;
-            self.mean(&mut e, &s.norm, &readout, n, (2 + 2 * index) * D)?;
+            let body = if c.question_in_state {
+                format!("{}\n{state}", q.text)
+            } else {
+                state.into()
+            };
+            let text = format!("{}{}", c.state_prefix, input::normalize(&body, &q.lang));
+            let ids = self.input.ids(&text)?;
+            ensure!(
+                ids.len() <= self.input.max_state && ids.len() <= 512,
+                "STATE_TRUNCATED: state + question is {} tokens; maximum {}",
+                ids.len(),
+                self.input.max_state
+            );
+            ensure!(
+                !ids.is_empty() && ids.iter().all(|&id| (id as usize) < 250037),
+                "invalid Decima tokens"
+            );
+            let rows =
+                self.input
+                    .choices(q, &c.choice_prefix, c.question_in_choices, c.choice_fit)?;
+            ensure!(
+                rows.iter().all(|r| !r.is_empty()
+                    && r.len() <= 64
+                    && r.iter().all(|&id| (id as usize) < 250037)),
+                "invalid Decima choice tokens"
+            );
+            prepared.push((ids, rows));
         }
-        let result = self
-            .device
-            .read(e, &readout, (1 + 2 * q.choices.len()) * D)
+        let groups = plan(session, prepared);
+        let mut out = Vec::with_capacity(items.len());
+        let mut item = 0;
+        for g in &groups {
+            let mut encoder = None;
+            for index in 0..g.chunks.len() {
+                let arena = session.arena.as_mut().unwrap();
+                let mut e = self
+                    .device
+                    .device
+                    .create_command_encoder(&Default::default());
+                self.record(arena, g, index, &mut e)?;
+                if index + 1 < g.chunks.len() {
+                    self.device.queue.submit([e.finish()]);
+                } else {
+                    encoder = Some(e);
+                }
+            }
+            let arena = session.arena.as_ref().unwrap();
+            let pooled = device::read(
+                &self.device,
+                encoder.context("Decima request has no work")?,
+                &arena.readout,
+                &arena.staging,
+                g.readout_rows * D,
+            )
             .await?;
-        self.readout.probabilities(&result, q.kind, c.temperature)
+            for q in &g.questions {
+                let rows = &pooled[q.readout * D..(q.readout + 1 + 2 * q.choices) * D];
+                out.push(
+                    self.readout
+                        .probabilities(rows, items[item].1.kind, c.temperature)?,
+                );
+                item += 1;
+            }
+        }
+        Ok(out)
+    }
+
+    fn record(
+        &self,
+        a: &mut Arena,
+        g: &Group,
+        index: usize,
+        e: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        let chunk = &g.chunks[index];
+        let first = index == 0;
+        let mut tables: Vec<u32> = Vec::new();
+        // Encoder batch: (token, position) per row, sequences back to back, and attention tiles
+        // that stay inside each sequence.
+        let mut encoder_rows = 0;
+        for (first_row, ids) in &chunk.encode {
+            ensure!(
+                *first_row == encoder_rows,
+                "Decima encoder rows must be contiguous"
+            );
+            tables.extend(ids.iter().enumerate().flat_map(|(p, &id)| [id, p as u32]));
+            encoder_rows += ids.len();
+        }
+        let encoder_tiles = tables.len();
+        for (first_row, ids) in &chunk.encode {
+            tiles(
+                &mut tables,
+                ENCODER_QUERIES,
+                *first_row,
+                ids.len(),
+                *first_row,
+                ids.len(),
+            );
+        }
+        let encoder_tile_count = (tables.len() - encoder_tiles) / 4;
+        let state_means = tables.len();
+        for q in &g.questions {
+            tables.extend([q.state as u32, q.tokens as u32, q.readout as u32]);
+        }
+        let scatter = tables.len();
+        tables.extend(chunk.scatter.iter().flatten());
+        // Scorer batch: choices are laid out back to back in the stream.
+        let gather = tables.len();
+        let mut segments = Vec::new();
+        let mut scorer_rows = 0;
+        for (question, readout, rows) in &chunk.choices {
+            for &row in rows {
+                tables.extend([row, scorer_rows as u32]);
+                scorer_rows += 1;
+            }
+            segments.push((scorer_rows - rows.len(), rows.len(), *question, *readout));
+        }
+        let self_tiles = tables.len();
+        for &(start, count, _, _) in &segments {
+            tiles(&mut tables, self.queries, start, count, start, count);
+        }
+        let self_tile_count = (tables.len() - self_tiles) / 4;
+        // Cross attention: each question's choices attend to that question's state.
+        let cross_tiles = tables.len();
+        for run in segments.chunk_by(|a, b| a.2 == b.2) {
+            let (start, question) = (run[0].0, &g.questions[run[0].2]);
+            let count = run.iter().map(|s| s.1).sum();
+            tiles(
+                &mut tables,
+                self.queries,
+                start,
+                count,
+                question.state,
+                question.tokens,
+            );
+        }
+        let cross_tile_count = (tables.len() - cross_tiles) / 4;
+        let originals = tables.len();
+        for &(start, count, _, readout) in &segments {
+            tables.extend([start as u32, count as u32, readout as u32]);
+        }
+        let finals = tables.len();
+        for &(start, count, _, readout) in &segments {
+            tables.extend([start as u32, count as u32, (readout + 1) as u32]);
+        }
+        ensure!(
+            tables.len() <= a.table_capacity,
+            "Decima request tables too large"
+        );
+        self.device
+            .queue
+            .write_buffer(&a.tables, 0, bytemuck::cast_slice(&tables));
+        a.bindings.reserve(&self.device, 160);
+        let mut f = Frame::new();
+        let (hidden, update, qkv, context, ff) = (
+            a.hidden.clone(),
+            a.update.clone(),
+            a.qkv.clone(),
+            a.context.clone(),
+            a.ff.clone(),
+        );
+        if encoder_rows > 0 {
+            let n = encoder_rows;
+            let [v0, v1, v2, v3] = &self.vocabulary;
+            let tables = a.tables.clone();
+            f.dispatch(
+                &self.device,
+                &mut a.bindings,
+                &self.kernels.embed,
+                &[v0, v1, v2, v3, &self.prelude, &tables, &hidden],
+                &[0, self.embedding_eps.to_bits()],
+                [n as u32, 1, 1],
+            )?;
+            for l in &self.encoder {
+                self.gemm(&mut f, a, &l.qkv, &hidden, None, false, &qkv, n)?;
+                self.attention(
+                    &mut f,
+                    a,
+                    &self.kernels.encoder_attention,
+                    &qkv,
+                    &qkv,
+                    &context,
+                    [3 * D, 0, 3 * D, D, 2 * D],
+                    12,
+                    encoder_tiles,
+                    encoder_tile_count,
+                )?;
+                self.gemm(&mut f, a, &l.o, &context, Some(&hidden), false, &update, n)?;
+                self.norm(&mut f, a, &l.n1, &update, &hidden, n)?;
+                self.gemm(&mut f, a, &l.ff1, &hidden, None, true, &ff, n)?;
+                self.gemm(&mut f, a, &l.ff2, &ff, Some(&hidden), false, &update, n)?;
+                self.norm(&mut f, a, &l.n2, &update, &hidden, n)?;
+            }
+        }
+        let (memory, cache, readout, normed) = (
+            a.memory.clone(),
+            a.cache.clone(),
+            a.readout.clone(),
+            a.normed.clone(),
+        );
+        if first {
+            self.gemm(
+                &mut f,
+                a,
+                &self.memory,
+                &hidden,
+                None,
+                false,
+                &memory,
+                g.state_rows,
+            )?;
+            self.rows_op(
+                &mut f,
+                a,
+                &self.kernels.mean,
+                &hidden,
+                &readout,
+                state_means,
+                g.questions.len(),
+            )?;
+        }
+        self.rows_op(
+            &mut f,
+            a,
+            &self.kernels.copy,
+            &hidden,
+            &cache,
+            scatter,
+            chunk.scatter.len(),
+        )?;
+        let [mut x, mut y] = a.stream.clone();
+        if scorer_rows > 0 {
+            self.rows_op(
+                &mut f,
+                a,
+                &self.kernels.copy,
+                &cache,
+                &x,
+                gather,
+                scorer_rows,
+            )?;
+            self.rows_op(
+                &mut f,
+                a,
+                &self.kernels.mean,
+                &x,
+                &readout,
+                originals,
+                segments.len(),
+            )?;
+            let n = scorer_rows;
+            let attention = &self.kernels.scorer_attention;
+            for (index, l) in self.scorer.iter().enumerate() {
+                self.norm(&mut f, a, &l.n1, &x, &normed, n)?;
+                self.gemm(&mut f, a, &l.qkv, &normed, None, false, &qkv, n)?;
+                self.attention(
+                    &mut f,
+                    a,
+                    attention,
+                    &qkv,
+                    &qkv,
+                    &context,
+                    [3 * D, 0, 3 * D, D, 2 * D],
+                    6,
+                    self_tiles,
+                    self_tile_count,
+                )?;
+                self.gemm(&mut f, a, &l.o, &context, Some(&x), false, &y, n)?;
+                self.norm(&mut f, a, &l.n2, &y, &normed, n)?;
+                self.gemm(&mut f, a, &l.cross_q, &normed, None, false, &update, n)?;
+                let offset = index * 2 * D;
+                self.attention(
+                    &mut f,
+                    a,
+                    attention,
+                    &update,
+                    &memory,
+                    &context,
+                    [D, 0, 4 * D, offset, offset + D],
+                    6,
+                    cross_tiles,
+                    cross_tile_count,
+                )?;
+                self.gemm(&mut f, a, &l.cross_o, &context, Some(&y), false, &x, n)?;
+                self.norm(&mut f, a, &l.n3, &x, &normed, n)?;
+                self.gemm(&mut f, a, &l.ff1, &normed, None, true, &ff, n)?;
+                self.gemm(&mut f, a, &l.ff2, &ff, Some(&x), false, &y, n)?;
+                std::mem::swap(&mut x, &mut y);
+            }
+            self.norm(&mut f, a, &self.out_norm, &x, &normed, n)?;
+            self.rows_op(
+                &mut f,
+                a,
+                &self.kernels.mean,
+                &normed,
+                &readout,
+                finals,
+                segments.len(),
+            )?;
+        }
+        f.encode(&self.device, &a.bindings, e);
+        Ok(())
     }
 }
+
+// Tiles of up to `size` queries over [first, first + count), each attending
+// [keys, keys + key_count).
+fn tiles(t: &mut Vec<u32>, size: usize, first: usize, count: usize, keys: usize, key_count: usize) {
+    for q in (0..count).step_by(size) {
+        t.extend([
+            (first + q) as u32,
+            size.min(count - q) as u32,
+            keys as u32,
+            key_count as u32,
+        ]);
+    }
+}
+
+// Groups questions by state and readout capacity, assigns cache rows (evicting older entries
+// not used by this request) and splits each group's choices into chunks of CHUNK_ROWS rows.
+fn plan(session: &mut Session, items: Vec<(Vec<u32>, Vec<Vec<u32>>)>) -> Vec<Group> {
+    session.request += 1;
+    let request = session.request;
+    let cache_rows = session.arena.as_ref().unwrap().cache_rows as u32;
+    let mut groups: Vec<Group> = Vec::new();
+    let mut pending: Vec<Vec<Vec<Vec<u32>>>> = Vec::new();
+    for (state, choices) in items {
+        let need = 1 + 2 * choices.len();
+        let fits = groups.last().is_some_and(|g| {
+            g.state_rows + state.len() <= STATE_ROWS && g.readout_rows + need <= READOUT_ROWS
+        });
+        if !fits {
+            groups.push(Group {
+                questions: Vec::new(),
+                chunks: vec![Chunk::default()],
+                state_rows: 0,
+                readout_rows: 0,
+            });
+            pending.push(Vec::new());
+        }
+        let g = groups.last_mut().unwrap();
+        g.questions.push(Placed {
+            state: g.state_rows,
+            tokens: state.len(),
+            readout: g.readout_rows,
+            choices: choices.len(),
+        });
+        g.state_rows += state.len();
+        g.readout_rows += need;
+        g.chunks[0]
+            .encode
+            .push((g.questions.last().unwrap().state, state));
+        pending.last_mut().unwrap().push(choices);
+    }
+    for (g, pending) in groups.iter_mut().zip(pending) {
+        let mut used = 0;
+        let mut encoded = g.state_rows;
+        for (question, choices) in pending.into_iter().enumerate() {
+            let readout = g.questions[question].readout;
+            for (j, ids) in choices.into_iter().enumerate() {
+                if used + ids.len() > CHUNK_ROWS {
+                    g.chunks.push(Chunk::default());
+                    used = 0;
+                    encoded = 0;
+                }
+                let chunk = g.chunks.last_mut().unwrap();
+                let row = readout + 1 + 2 * j;
+                let n = ids.len();
+                used += n;
+                if let Some(i) = session.cache.iter().position(|e| e.ids == ids) {
+                    let mut entry = session.cache.remove(i).unwrap();
+                    entry.request = request;
+                    chunk.choices.push((question, row, entry.rows.clone()));
+                    session.cache.push_back(entry);
+                    session.choice_cache_hits += 1;
+                    continue;
+                }
+                let bytes = n * ROW_BYTES;
+                let mut rows = None;
+                if bytes <= session.limit && n <= cache_rows as usize {
+                    while (session.bytes + bytes > session.limit || session.free.len() < n)
+                        && session.cache.front().is_some_and(|e| e.request != request)
+                    {
+                        let old = session.cache.pop_front().unwrap();
+                        session.bytes -= old.ids.len() * ROW_BYTES;
+                        session.free.extend(old.rows);
+                    }
+                    if session.bytes + bytes <= session.limit && session.free.len() >= n {
+                        rows = Some(session.free.split_off(session.free.len() - n));
+                    }
+                }
+                let cacheable = rows.is_some();
+                let first = (used - n) as u32;
+                let rows =
+                    rows.unwrap_or_else(|| (0..n as u32).map(|i| cache_rows + first + i).collect());
+                for (i, &row) in rows.iter().enumerate() {
+                    chunk.scatter.push([(encoded + i) as u32, row]);
+                }
+                chunk.choices.push((question, row, rows.clone()));
+                chunk.encode.push((encoded, ids.clone()));
+                encoded += n;
+                if cacheable {
+                    session.bytes += bytes;
+                    session.cache.push_back(Entry { ids, rows, request });
+                }
+            }
+        }
+    }
+    groups
+}
+
 impl Linear {
-    fn upload(device: &Device, l: cpu::Linear) -> Result<Self> {
-        let (input, output, weight, bias) = l.into_float_parts()?;
+    // Concatenates the outputs of `parts` and transposes them to [input × output].
+    fn upload(device: &Device, parts: Vec<cpu::Linear>) -> Result<Self> {
+        let parts = parts
+            .into_iter()
+            .map(|l| l.into_float_parts())
+            .collect::<Result<Vec<_>>>()?;
+        let input = parts[0].0;
+        ensure!(
+            parts.iter().all(|p| p.0 == input),
+            "Decima projection widths differ"
+        );
+        let output: usize = parts.iter().map(|p| p.1).sum();
+        ensure!(
+            input % 16 == 0 && output % 64 == 0,
+            "Decima projection shape"
+        );
+        let mut weight = vec![0.; input * output];
+        let mut bias = Vec::with_capacity(output);
+        let mut column = 0;
+        for (_, n, w, b) in &parts {
+            for o in 0..*n {
+                for k in 0..input {
+                    weight[k * output + column + o] = w[o * input + k];
+                }
+            }
+            bias.extend_from_slice(b);
+            column += n;
+        }
         Ok(Self {
             input,
             output,
@@ -614,67 +1047,11 @@ impl Linear {
 }
 impl Norm {
     fn upload(device: &Device, l: &cpu::Norm) -> Result<Self> {
+        ensure!(l.weight.len() == D, "Decima norm width");
         Ok(Self {
-            width: l.weight.len(),
             eps: l.eps,
             weight: device.buffer(&l.weight, "Decima norm weight")?,
             bias: device.buffer(&l.bias, "Decima norm bias")?,
-        })
-    }
-}
-impl Attention {
-    fn upload(device: &Device, l: super::Attention) -> Result<Self> {
-        Ok(Self {
-            q: Linear::upload(device, l.q)?,
-            k: Linear::upload(device, l.k)?,
-            v: Linear::upload(device, l.v)?,
-            o: Linear::upload(device, l.o)?,
-        })
-    }
-}
-impl EncoderLayer {
-    fn upload(device: &Device, l: super::EncoderLayer) -> Result<Self> {
-        Ok(Self {
-            attention: Attention {
-                q: Linear::upload(device, l.q)?,
-                k: Linear::upload(device, l.k)?,
-                v: Linear::upload(device, l.v)?,
-                o: Linear::upload(device, l.o)?,
-            },
-            n1: Norm::upload(device, &l.n1)?,
-            n2: Norm::upload(device, &l.n2)?,
-            ff1: Linear::upload(device, l.ff1)?,
-            ff2: Linear::upload(device, l.ff2)?,
-        })
-    }
-}
-impl ScorerLayer {
-    fn upload(device: &Device, l: super::ScorerLayer) -> Result<Self> {
-        Ok(Self {
-            self_attn: Attention::upload(device, l.self_attn)?,
-            cross_attn: Attention::upload(device, l.cross_attn)?,
-            n1: Norm::upload(device, &l.n1)?,
-            n2: Norm::upload(device, &l.n2)?,
-            n3: Norm::upload(device, &l.n3)?,
-            ff1: Linear::upload(device, l.ff1)?,
-            ff2: Linear::upload(device, l.ff2)?,
-        })
-    }
-}
-impl Buffers {
-    fn new(device: &Device, n: usize, nk: usize, tile: usize) -> Result<Self> {
-        Ok(Self {
-            hidden: device.empty(n * D, "Decima hidden")?,
-            norm: device.empty(n * D, "Decima norm")?,
-            q: device.empty(n * D, "Decima q")?,
-            k: device.empty(n * D, "Decima k")?,
-            v: device.empty(n * D, "Decima v")?,
-            context: device.empty(n * D, "Decima context")?,
-            update: device.empty(n * D, "Decima update")?,
-            ff: device.empty(n * 1536, "Decima ff")?,
-            activated: device.empty(n * 1536, "Decima activated")?,
-            scores: device.empty(tile.min(n) * nk * 12, "Decima scores")?,
-            probabilities: device.empty(tile.min(n) * nk * 12, "Decima probabilities")?,
         })
     }
 }
@@ -725,8 +1102,12 @@ impl Model {
             .map(|(id, spec)| Ok((id, input::parse_question(id, spec, lang)?)))
             .collect::<Result<Vec<_>>>()?;
         let r = |v: f64| (v * 10000.).round_ties_even() / 10000.;
-        for (id, (q, keys)) in parsed {
-            let p = self.decide(&state, &q, s).await?;
+        let batch: Vec<_> = parsed
+            .iter()
+            .map(|(_, (q, _))| (state.as_str(), q))
+            .collect();
+        let scores = self.decide_many(&batch, s).await?;
+        for ((id, (q, keys)), p) in parsed.into_iter().zip(scores) {
             let best = p
                 .iter()
                 .enumerate()
@@ -769,12 +1150,108 @@ impl Model {
     }
 }
 
+// Splits the word embeddings out of an encoder safetensors header: returns the header of the
+// checkpoint without them, offsets closed over the gap, and their byte range in the data.
+#[cfg(feature = "wasm")]
+fn without_vocabulary(header: &[u8]) -> Result<(Vec<u8>, std::ops::Range<usize>)> {
+    let mut tensors: serde_json::Map<String, Value> = serde_json::from_slice(header)?;
+    let name = "embeddings.word_embeddings.weight";
+    let entry = tensors
+        .remove(name)
+        .context("encoder checkpoint has no word embeddings")?;
+    let offsets = |v: &Value| -> Option<[usize; 2]> {
+        let o = v["data_offsets"].as_array()?;
+        Some([o.first()?.as_u64()? as usize, o.get(1)?.as_u64()? as usize])
+    };
+    let [start, end] = offsets(&entry).context("invalid word embedding offsets")?;
+    ensure!(
+        entry["dtype"] == "F32"
+            && entry["shape"] == json!([VOCABULARY, D])
+            && end - start == VOCABULARY * D * 4,
+        "WebGPU requires float Decima embeddings"
+    );
+    for (key, value) in tensors.iter_mut() {
+        if key == "__metadata__" {
+            continue;
+        }
+        let [a, b] = offsets(value).with_context(|| format!("invalid offsets for {key}"))?;
+        ensure!(
+            b <= start || a >= end,
+            "tensor {key} overlaps the word embeddings"
+        );
+        if a >= end {
+            value["data_offsets"] = json!([a - (end - start), b - (end - start)]);
+        }
+    }
+    let mut out = serde_json::to_vec(&tensors)?;
+    out.resize(out.len().next_multiple_of(8), b' ');
+    Ok((out, start..end))
+}
+
 #[cfg(feature = "wasm")]
 mod browser {
     use super::*;
     use wasm_bindgen::prelude::*;
     fn error(e: impl std::fmt::Display) -> JsValue {
         JsValue::from_str(&e.to_string())
+    }
+    enum Source {
+        Blob(web_sys::Blob),
+        Bytes(js_sys::Uint8Array),
+    }
+    impl Source {
+        fn new(value: JsValue) -> Result<Self> {
+            if let Some(blob) = value.dyn_ref::<web_sys::Blob>() {
+                return Ok(Self::Blob(blob.clone()));
+            }
+            if let Some(buffer) = value.dyn_ref::<js_sys::ArrayBuffer>() {
+                return Ok(Self::Bytes(js_sys::Uint8Array::new(buffer)));
+            }
+            match value.dyn_into::<js_sys::Uint8Array>() {
+                Ok(bytes) => Ok(Self::Bytes(bytes)),
+                Err(_) => {
+                    anyhow::bail!("encoder weights must be a Blob, Uint8Array or ArrayBuffer")
+                }
+            }
+        }
+        fn len(&self) -> usize {
+            match self {
+                Self::Blob(blob) => blob.size() as usize,
+                Self::Bytes(bytes) => bytes.length() as usize,
+            }
+        }
+        async fn read(&self, start: usize, end: usize) -> Result<Vec<u8>> {
+            ensure!(
+                start <= end && end <= self.len(),
+                "encoder weights are truncated"
+            );
+            match self {
+                Self::Bytes(bytes) => Ok(bytes.subarray(start as u32, end as u32).to_vec()),
+                Self::Blob(blob) => {
+                    let js = |e: JsValue| anyhow::anyhow!("reading encoder weights: {e:?}");
+                    let part = blob
+                        .slice_with_f64_and_f64(start as f64, end as f64)
+                        .map_err(js)?;
+                    let buffer = wasm_bindgen_futures::JsFuture::from(part.array_buffer())
+                        .await
+                        .map_err(js)?;
+                    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+                }
+            }
+        }
+        // The checkpoint without its word embeddings, and their absolute byte range.
+        async fn without_vocabulary(&self) -> Result<(Vec<u8>, std::ops::Range<usize>)> {
+            let size = u64::from_le_bytes(self.read(0, 8).await?.try_into().unwrap()) as usize;
+            ensure!(size < 1 << 24, "invalid encoder checkpoint header");
+            let data = 8 + size;
+            let (header, gap) = super::without_vocabulary(&self.read(8, data).await?)?;
+            let mut out = Vec::with_capacity(8 + header.len() + self.len() - data - gap.len());
+            out.extend((header.len() as u64).to_le_bytes());
+            out.extend(header);
+            out.extend(self.read(data, data + gap.start).await?);
+            out.extend(self.read(data + gap.end, self.len()).await?);
+            Ok((out, data + gap.start..data + gap.end))
+        }
     }
     #[wasm_bindgen(js_name=DecimaWebGpuModel)]
     pub struct BrowserModel {
@@ -783,18 +1260,22 @@ mod browser {
     }
     #[wasm_bindgen(js_class=DecimaWebGpuModel)]
     impl BrowserModel {
+        // `encoder_weights` may be a Blob, Uint8Array or ArrayBuffer. It is read in ranges, and
+        // the word embeddings go straight to the GPU, so the checkpoint never sits in wasm memory.
         pub async fn create(
             config: Vec<u8>,
             encoder_config: Vec<u8>,
             tokenizer: Vec<u8>,
-            encoder_weights: Vec<u8>,
+            encoder_weights: JsValue,
             head_weights: Vec<u8>,
         ) -> Result<BrowserModel, JsValue> {
-            let model = CpuModel::from_bytes(
+            let source = Source::new(encoder_weights).map_err(error)?;
+            let (encoder, vocabulary) = source.without_vocabulary().await.map_err(error)?;
+            let cpu = CpuModel::without_vocabulary(
                 &config,
                 &encoder_config,
                 &tokenizer,
-                &encoder_weights,
+                &encoder,
                 &head_weights,
                 super::super::Options {
                     precision: Precision::F32,
@@ -802,15 +1283,20 @@ mod browser {
                 },
             )
             .map_err(error)?;
-            drop((
-                config,
-                encoder_config,
-                tokenizer,
-                encoder_weights,
-                head_weights,
-            ));
+            drop((config, encoder_config, tokenizer, encoder, head_weights));
+            let model = Model::without_vocabulary(cpu).await.map_err(error)?;
+            let step = 4096 * D * 4;
+            for at in vocabulary.clone().step_by(step) {
+                let bytes = source
+                    .read(at, (at + step).min(vocabulary.end))
+                    .await
+                    .map_err(error)?;
+                model
+                    .write_vocabulary((at - vocabulary.start) / (D * 4), &bytes)
+                    .map_err(error)?;
+            }
             Ok(Self {
-                model: Model::from_cpu(model).await.map_err(error)?,
+                model,
                 session: Session::default(),
             })
         }
@@ -840,11 +1326,10 @@ mod browser {
             )
             .map_err(error)
         }
+        // Length rules tune the CPU kernels; the GPU path sizes its work per batch.
         #[wasm_bindgen(js_name=setLengthRules)]
-        pub fn set_length_rules(&mut self, json: &str) -> Result<(), JsValue> {
-            self.model
-                .set_length_rules(serde_json::from_str(json).map_err(error)?)
-                .map_err(error)
+        pub fn set_length_rules(&mut self, _json: &str) -> Result<(), JsValue> {
+            Err(error("length rules apply only to the CPU Decima model"))
         }
         #[wasm_bindgen(js_name=clearCache)]
         pub fn clear_cache(&mut self) {
