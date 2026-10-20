@@ -189,6 +189,13 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
                 }
             }
             gpu.select_norm().await?;
+            if wide {
+                gpu.select_gemm().await?;
+                gpu.install_pipeline("int8_silu_input", grouped_q4::quantize_silu()).await?;
+                if gpu.pipelines.contains_key("q4_mlp") {
+                    gpu.select_mlp().await?;
+                }
+            }
             // Per-dispatch timestamps need their own passes.
             gpu.device.batch_passes.set(!profile);
         }
@@ -198,6 +205,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
     // The chained and staged scans keep the baseline's summation order, so they must match bit for bit;
     // the fastest one this device's compiler preserves that for is kept if measurably faster.
     async fn select_delta_scan(&mut self, forced: Option<&'static str>) -> Result<()> {
+        let started = now_ms();
         const ROWS: usize = 128;
         const CANDIDATES: [&str; 3] = ["delta_scan", "delta_scan_chained", "delta_scan_staged"];
         // Unit-scale q/k/v and decays below one, like delta_qk and delta_params outputs.
@@ -246,13 +254,145 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         };
         self.delta_scan_selection = serde_json::json!({"forced":forced.is_some(),"rows":ROWS,
             "baseline_ms":best[0],"chained_ms":best[1],"staged_ms":best[2],"max_abs_difference":difference,
-            "agrees":agrees[1]&&agrees[2],"chained_agrees":agrees[1],"staged_agrees":agrees[2]});
+            "agrees":agrees[1]&&agrees[2],"chained_agrees":agrees[1],"staged_agrees":agrees[2],
+            "elapsed_ms":now_ms() - started});
         for buffer in [qk, gates].into_iter().chain(outputs) {
             buffer.destroy();
         }
         self.device.discard_pending();
         let forced_agrees = CANDIDATES.iter().zip(agrees).all(|(name, ok)| ok || forced != Some(*name));
         ensure!(forced_agrees, "forced delta scan disagrees with the baseline");
+        Ok(())
+    }
+
+    // Best time per run of each candidate in ms. Safari rounds performance.now() to whole
+    // milliseconds, so each timed batch repeats a candidate until it takes about 30 ms; rounds
+    // rotate the order so no candidate always runs first while clocks ramp up.
+    async fn time_candidates<F>(&self, count: usize, encode: F) -> Result<Vec<f64>>
+    where
+        F: Fn(usize, &mut wgpu::CommandEncoder) -> Result<()>,
+    {
+        let batch = |i: usize, reps: usize| -> Result<wgpu::CommandEncoder> {
+            let mut encoder = self.device.encoder();
+            for _ in 0..reps {
+                encode(i, &mut encoder)?;
+            }
+            Ok(encoder)
+        };
+        // The first runs compile and warm up every candidate.
+        for i in 0..count {
+            self.device.submit_deferred(batch(i, 1)?).wait().await?;
+        }
+        let start = now_ms();
+        self.device.submit_deferred(batch(0, 2)?).wait().await?;
+        let per_run = ((now_ms() - start) / 2.).max(0.1);
+        let reps = ((30. / per_run).ceil() as usize).clamp(2, 64);
+        let mut best = vec![f64::INFINITY; count];
+        for round in 0..3 {
+            for i in (0..count).map(|j| (j + round) % count) {
+                let encoder = batch(i, reps)?;
+                let start = now_ms();
+                self.device.submit_deferred(encoder).wait().await?;
+                best[i] = best[i].min((now_ms() - start) / reps as f64);
+            }
+        }
+        Ok(best)
+    }
+
+    // Every candidate keeps the tuned kernel's per-output fma order: the k loop fully unrolled on
+    // 64x64 or 32x64 tiles, or 8x16 threads with 4x8 outputs each. The fastest one that is bitwise
+    // equal to the tuned kernel on this device, and measurably faster, replaces int8_gemm.
+    async fn select_gemm(&mut self) -> Result<()> {
+        let started = now_ms();
+        const M: usize = 256;
+        const N: usize = 4096;
+        const K: usize = 2560;
+        const CANDIDATES: [(&str, &str); 4] = [
+            ("tuned", "int8_gemm"),
+            ("unrolled-64x64", "int8_gemm_unrolled_64x64"),
+            ("unrolled-32x64", "int8_gemm_unrolled_32x64"),
+            ("r4x8", "int8_gemm_r4x8"),
+        ];
+        for (name, source) in [
+            (CANDIDATES[1].1, include_str!("grouped_q4_unrolled_64x64.wgsl")),
+            (CANDIDATES[2].1, include_str!("grouped_q4_unrolled_32x64.wgsl")),
+            (CANDIDATES[3].1, include_str!("grouped_q4_r4x8.wgsl")),
+        ] {
+            self.install_pipeline(name, source.into()).await?;
+        }
+        let x = self.device.bytes(bytemuck::cast_slice(&packed_test_words(M, K, 17, 0)), "GEMM selection input")?;
+        let w = self.device.bytes(bytemuck::cast_slice(&packed_test_words(N, K, 9, 7)), "GEMM selection weights")?;
+        let mut outputs = Vec::new();
+        for _ in CANDIDATES {
+            outputs.push(self.device.empty(M * N, "GEMM selection output")?);
+        }
+        let best = self
+            .time_candidates(CANDIDATES.len(), |i, encoder| {
+                self.run(encoder, CANDIDATES[i].1, [&x, &w, &self.dummy, &outputs[i]], &[M, N, K], 0)
+            })
+            .await?;
+        let tuned = self.device.read_words(self.device.encoder(), &outputs[0], M * N).await?;
+        let mut agrees = [true; 4];
+        for i in 1..4 {
+            agrees[i] = tuned == self.device.read_words(self.device.encoder(), &outputs[i], M * N).await?;
+        }
+        let fastest = (1..4)
+            .filter(|&i| agrees[i] && best[i] < best[0] * 0.97)
+            .min_by(|&a, &b| best[a].total_cmp(&best[b]))
+            .unwrap_or(0);
+        for (i, (_, name)) in CANDIDATES.iter().enumerate().skip(1) {
+            let pipeline = self.pipelines.remove(name).context("GEMM candidate")?;
+            if i == fastest {
+                self.pipelines.insert("int8_gemm", pipeline);
+                self.int8_gemm_tile = Some(Self::gemm_candidate_tile(name));
+            }
+        }
+        self.gemm_selection = serde_json::json!({"shape":[M,N,K],"candidates":CANDIDATES.map(|c| c.0),
+            "ms_per_run":best,"agrees":agrees,"selected":CANDIDATES[fastest].0,"elapsed_ms":now_ms() - started});
+        for buffer in [x, w].into_iter().chain(outputs) {
+            buffer.destroy();
+        }
+        self.device.discard_pending();
+        Ok(())
+    }
+
+    // The fused gate/up/SiLU/quantize kernel emits exactly the unfused path's down_proj input,
+    // so keep it only where it beats two int8_gemm projections and the SiLU-product quantizer.
+    async fn select_mlp(&mut self) -> Result<()> {
+        let started = now_ms();
+        const M: usize = 128;
+        const N: usize = 9216;
+        const K: usize = D;
+        let x = self.device.bytes(bytemuck::cast_slice(&packed_test_words(M, K, 17, 0)), "MLP selection input")?;
+        let gate = self.device.bytes(bytemuck::cast_slice(&packed_test_words(N, K, 9, 7)), "MLP selection gate")?;
+        let up = self.device.bytes(bytemuck::cast_slice(&packed_test_words(N, K, 9, 11)), "MLP selection up")?;
+        let g = self.device.empty(M * N, "MLP selection gate output")?;
+        let u = self.device.empty(M * N, "MLP selection up output")?;
+        let words = M * (N / 64) * 17;
+        let outputs = [self.device.empty(words, "MLP selection output")?, self.device.empty(words, "MLP selection output")?];
+        let best = self
+            .time_candidates(2, |i, encoder| {
+                if i == 0 {
+                    self.run(encoder, "q4_mlp", [&x, &gate, &up, &outputs[0]], &[M, N, K], 0)
+                } else {
+                    self.run(encoder, "int8_gemm", [&x, &gate, &self.dummy, &g], &[M, N, K], 0)?;
+                    self.run(encoder, "int8_gemm", [&x, &up, &self.dummy, &u], &[M, N, K], 0)?;
+                    self.run(encoder, "int8_silu_input", [&g, &u, &self.dummy, &outputs[1]], &[M, 0, N], 0)
+                }
+            })
+            .await?;
+        let fused = self.device.read_words(self.device.encoder(), &outputs[0], words).await?;
+        let agrees = fused == self.device.read_words(self.device.encoder(), &outputs[1], words).await?;
+        ensure!(agrees, "fused MLP differs from the unfused path");
+        // Ties keep the fused kernel, the established default.
+        let keep_fused = best[1] >= best[0] * 0.97;
+        self.fused_mlp = keep_fused;
+        self.mlp_selection = serde_json::json!({"shape":[M,N,K],"fused_ms_per_run":best[0],"unfused_ms_per_run":best[1],
+            "selected":if keep_fused { "fused" } else { "unfused" },"elapsed_ms":now_ms() - started});
+        for buffer in [x, gate, up, g, u].into_iter().chain(outputs) {
+            buffer.destroy();
+        }
+        self.device.discard_pending();
         Ok(())
     }
 
@@ -446,4 +586,13 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             Ok(serde_json::Value::Null)
         }
     }
+}
+
+// Group-64 packed rows for kernel selection: `stride` words per group whose last word is a small
+// positive scale; the packed int8 or q4 codes before it may be any bits.
+fn packed_test_words(rows: usize, k: usize, stride: usize, seed: usize) -> Vec<u32> {
+    let hash = |i: usize| ((i + seed) as u32).wrapping_mul(2654435761).rotate_left(13).wrapping_mul(2246822519);
+    (0..rows * k / 64 * stride)
+        .map(|i| if i % stride == stride - 1 { (0.001 + (hash(i) % 1000) as f32 * 1e-5).to_bits() } else { hash(i) })
+        .collect()
 }

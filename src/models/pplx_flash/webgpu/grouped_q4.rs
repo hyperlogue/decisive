@@ -25,6 +25,24 @@ fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_index) l:u3
 }"#.into()
 }
 
+// quantize() applied to POINT's SiLU product of gate (x) and up (w): the down_proj input of the
+// unfused MLP without materializing the product.
+pub(super) fn quantize_silu() -> String {
+    quantize()
+        .replace(
+            "@group(0) @binding(3)",
+            "@group(0) @binding(1) var<storage,read> w:array<u32>;\n@group(0) @binding(3)",
+        )
+        .replace(
+            "fn even(",
+            "fn sigmoid(v:f32)->f32 { return 1.0/(1.0+exp(-v)); }\nfn silu(v:f32)->f32 { return v*sigmoid(v); }\nfn even(",
+        )
+        .replace(
+            "v=vec4<f32>(x[first],x[first+1u],x[first+2u],x[first+3u]);",
+            "for(var j=0u;j<4u;j++){v[j]=silu(x[first+j])*bitcast<f32>(w[first+j]);}",
+        )
+}
+
 pub(super) fn gemm(unsigned: bool) -> String {
     let mut s = r#"requires packed_4x8_integer_dot_product;
 struct Params { a:vec4<u32>, b:vec4<u32>, c:vec4<u32>, d:vec4<u32> }
@@ -249,8 +267,9 @@ pub(crate) async fn check() -> Result<serde_json::Value> {
     Ok(serde_json::json!({"passed":true,"scheme":"q4-w4a8-e4-r4-g64","checks":checks}))
 }
 
-// The fused gate/up/SiLU/quantize kernel must emit exactly the down_proj input of the
-// unfused path: two projections, the SiLU product, then activation quantization.
+// The fused gate/up/SiLU/quantize kernel and the SiLU-product quantizer must both emit exactly
+// the down_proj input of the unfused path: two projections, the SiLU product, then activation
+// quantization.
 async fn fused_mlp_check() -> Result<serde_json::Value> {
     let gpu = Gpu::checkpoint("q4-e4", false).await?;
     ensure!(gpu.pipelines.contains_key("q4_mlp"), "fused MLP kernel unavailable on this device");
@@ -277,11 +296,16 @@ async fn fused_mlp_check() -> Result<serde_json::Value> {
     let expected = gpu.quantize_int8(&mut e, &activated, m, n, false)?;
     let fused = gpu.empty(m * (n / 64) * 17)?;
     gpu.run(&mut e, "q4_mlp", [&input, &gate, &up, &fused], &[m, n, k], 0)?;
+    let product = gpu.empty(m * (n / 64) * 17)?;
+    gpu.run(&mut e, "int8_silu_input", [&g, &u, &gpu.dummy, &product], &[m, 0, n], 0)?;
     let words = m * (n / 64) * 17;
     let expected = gpu.device.read_words(e, &expected, words).await?;
     let fused = gpu.device.read_words(gpu.device.encoder(), &fused, words).await?;
     let mismatches = expected.iter().zip(&fused).filter(|(a, b)| a != b).count();
     ensure!(mismatches == 0, "fused MLP differs from the unfused path in {mismatches} words");
+    let product = gpu.device.read_words(gpu.device.encoder(), &product, words).await?;
+    let mismatches = expected.iter().zip(&product).filter(|(a, b)| a != b).count();
+    ensure!(mismatches == 0, "SiLU-product quantizer differs from the unfused path in {mismatches} words");
     for buffer in [gate, up, x] {
         buffer.destroy();
     }

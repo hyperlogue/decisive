@@ -46,17 +46,35 @@ def assets_for(package, model, packed, asset_dir=None):
     return assets, generated
 
 
-def serve(package, model, packed, output, port, route_token=None, asset_dir=None):
-    assets, generated = assets_for(package, model, packed, asset_dir)
+KINDS = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.wasm': 'application/wasm'}
+
+
+def selector(labels, current):
+    # Injected into every version's page, including archived asset snapshots, so one URL reaches
+    # all builds. The weights cache in OPFS is per origin, so switching does not download again.
+    options = ''.join(f'<option{" selected" if label == current else ""}>{label}</option>' for label in labels)
+    return (f'<div style="position:sticky;top:0;z-index:9;padding:6px 12px;background:#222;color:#eee;font:14px system-ui">'
+            f'Build <select onchange="location.href=new URL(\'../\'+this.value+\'/\',location.href)">{options}</select></div>').encode()
+
+
+def serve(versions, model, packed, output, port, route_token=None):
+    labels = list(versions)
+    tables = {}
+    for label, (package, asset_dir) in versions.items():
+        assets, generated = assets_for(package, model, packed, asset_dir)
+        frozen = {route: (path.read_bytes(), KINDS[path.suffix]) for route, path in assets.items()
+                  if not route.startswith('model/') and path.suffix in ('.html', '.js', '.json')}
+        frozen.update({route: (body, 'application/json') for route, body in generated.items()})
+        page, kind = frozen['']
+        bar = selector(labels, label)
+        page = re.sub(rb'(<body[^>]*>)', lambda m: m[1] + bar, page, count=1) if re.search(rb'<body[^>]*>', page) else bar + page
+        frozen[''] = (page, kind)
+        tables[label] = (assets, frozen)
     output.mkdir(parents=True, exist_ok=True)
     route_token = route_token or secrets.token_hex(16)
     if not re.fullmatch(r'[a-f0-9]{32}', route_token):
         raise ValueError('Route token must be 32 hexadecimal characters')
     prefix = '/' + route_token + '/'
-    kinds = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.wasm': 'application/wasm'}
-    frozen = {route: (path.read_bytes(), kinds[path.suffix]) for route, path in assets.items()
-              if not route.startswith('model/') and path.suffix in ('.html', '.js', '.json')}
-    frozen.update({route: (body, 'application/json') for route, body in generated.items()})
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -78,13 +96,28 @@ def serve(package, model, packed, output, port, route_token=None, asset_dir=None
                 sent += count
                 deadline = time.monotonic() + 30
 
+        def version(self):
+            # Routes are prefix + 'v/<label>/<asset>'; returns (label, asset) or None.
+            route = urlsplit(self.path).path
+            match = re.fullmatch(re.escape(prefix) + r'v/([^/]+)/(.*)', route)
+            return (match[1], match[2]) if match and match[1] in tables else None
+
         def do_GET(self):
             self.connection.settimeout(30)
-            route = urlsplit(self.path).path
-            if not route.startswith(prefix):
+            path = urlsplit(self.path).path
+            if path in (prefix, prefix[:-1]):
+                # Relative, so it also works behind a reverse proxy that mounts this server under a path.
+                self.send_response(302)
+                self.send_header('Location', ('' if path == prefix else route_token + '/') + f'v/{labels[-1]}/')
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                return
+            routed = self.version()
+            if routed is None:
                 self.send_error(404)
                 return
-            route = route[len(prefix):]
+            label, route = routed
+            assets, frozen = tables[label]
             if route in frozen:
                 body, kind = frozen[route]
                 self.send_response(200)
@@ -108,7 +141,7 @@ def serve(package, model, packed, output, port, route_token=None, asset_dir=None
                     return
                 start, end = map(int, match.groups())
             self.send_response(206 if requested else 200)
-            kind = kinds.get(file.suffix, 'application/octet-stream')
+            kind = KINDS.get(file.suffix, 'application/octet-stream')
             self.send_header('Content-Type', kind)
             self.send_header('Content-Length', str(end - start + 1))
             self.send_header('Accept-Ranges', 'bytes')
@@ -131,9 +164,11 @@ def serve(package, model, packed, output, port, route_token=None, asset_dir=None
                 pass
 
         def do_POST(self):
-            if urlsplit(self.path).path != prefix + 'results' or self.headers.get('Sec-Fetch-Site') not in (None, 'same-origin'):
+            routed = self.version()
+            if routed is None or routed[1] != 'results' or self.headers.get('Sec-Fetch-Site') not in (None, 'same-origin'):
                 self.send_error(403)
                 return
+            label = routed[0]
             try:
                 size = int(self.headers.get('Content-Length', '0'))
                 if not 0 < size <= 16 * 1024 * 1024:
@@ -141,10 +176,11 @@ def serve(package, model, packed, output, port, route_token=None, asset_dir=None
                 report = json.loads(self.rfile.read(size))
                 if report.get('experiment') != 'pplx-phone-forward-v1' or not isinstance(report.get('runs'), list):
                     raise ValueError('Invalid report')
-                path = output / f'phone-{secrets.token_hex(8)}.json'
+                report['served_version'] = label
+                path = output / f'phone-{label}-{secrets.token_hex(8)}.json'
                 with path.open('x') as stream:
                     json.dump(report, stream)
-                print(json.dumps({'report': path.name, 'runs': len(report['runs'])}), flush=True)
+                print(json.dumps({'report': path.name, 'version': label, 'runs': len(report['runs'])}), flush=True)
             except (ValueError, OSError) as error:
                 self.send_error(400, str(error))
                 return
@@ -158,13 +194,25 @@ def serve(package, model, packed, output, port, route_token=None, asset_dir=None
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--package', required=True, type=Path)
+    parser.add_argument('--package', type=Path, help='single build, served as version "current"')
+    parser.add_argument('--assets', type=Path, help='asset snapshot for --package')
+    parser.add_argument('--version', action='append', default=[], metavar='LABEL=PACKAGE[,ASSETS]',
+                        help='a selectable build; repeat in age order, the last one is the default')
     parser.add_argument('--packed', required=True, type=Path)
     parser.add_argument('--model', type=Path, default=ROOT / 'models/pplx-decider-flash-v1.2')
     parser.add_argument('--output', type=Path, default=ROOT / 'benchmark-runs/pplx-phone')
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--route-token')
-    parser.add_argument('--assets', type=Path)
     args = parser.parse_args()
-    serve(args.package.resolve(), args.model.resolve(), args.packed.resolve(), args.output.resolve(), args.port,
-          args.route_token, args.assets.resolve() if args.assets else None)
+    versions = {}
+    for spec in args.version:
+        label, _, paths = spec.partition('=')
+        package, _, assets = paths.partition(',')
+        if not re.fullmatch(r'[A-Za-z0-9._-]{1,40}', label) or not package or label in versions:
+            parser.error(f'invalid --version {spec!r}')
+        versions[label] = (Path(package).resolve(), Path(assets).resolve() if assets else None)
+    if args.package:
+        versions['current'] = (args.package.resolve(), args.assets.resolve() if args.assets else None)
+    if not versions:
+        parser.error('give --package or at least one --version')
+    serve(versions, args.model.resolve(), args.packed.resolve(), args.output.resolve(), args.port, args.route_token)

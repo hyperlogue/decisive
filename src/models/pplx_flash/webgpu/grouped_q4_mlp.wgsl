@@ -11,9 +11,14 @@ var<workgroup> rmax:array<atomic<u32>,64>;var<workgroup> codes:array<atomic<u32>
 fn even(v:f32)->i32 {let lo=floor(v);let f=v-lo;return i32(lo)+select(0,1,f>0.5||(f==0.5&&(i32(lo)&1)==1));}
 fn sigmoid(v:f32)->f32 { return 1.0/(1.0+exp(-v)); }
 fn silu(v:f32)->f32 { return v*sigmoid(v); }
+// Bytes 0/2 and 1/3 as f16 1024+(b^128), minus 1152: the exact signed byte.
 fn unpack_a(v:u32)->vec4<f16>{
- return vec4<f16>(bitcast<vec4<i32>>(vec4<u32>(v)<<vec4<u32>(24u,16u,8u,0u))>>vec4<u32>(24u));
+ let lo=bitcast<vec2<f16>>(((v&0x00ff00ffu)^0x00800080u)|0x64006400u)-vec2<f16>(1152.0h);
+ let hi=bitcast<vec2<f16>>((((v>>8u)&0x00ff00ffu)^0x00800080u)|0x64006400u)-vec2<f16>(1152.0h);
+ return vec4<f16>(lo.x,hi.x,lo.y,hi.y);
 }
+// Nibbles i and i+4 as f16 1024+n, minus 1032: the exact signed code.
+fn nib2(word:u32,s:u32)->vec2<f16>{return bitcast<vec2<f16>>(((word>>s)&0x000f000fu)|0x64006400u)-vec2<f16>(1032.0h);}
 @compute @workgroup_size(16,16)
 fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_id) local:vec3<u32>){
  let l=local&vec3<u32>(15u);
@@ -33,15 +38,13 @@ for(var group=0u;group<groups;group++){
   if(g.x*64u+r<n){
    let o=((g.x*64u+r)*groups+group)*9u+c;
    let word=w[o];
-   let lo=vec4<f16>(vec4<i32>((vec4<u32>(word)>>vec4<u32>(0u,8u,16u,24u))&vec4<u32>(15u))-vec4<i32>(8));
-   let hi=vec4<f16>(vec4<i32>((vec4<u32>(word)>>vec4<u32>(4u,12u,20u,28u))&vec4<u32>(15u))-vec4<i32>(8));
-   bt[c*2u*64u+r]=vec4<f16>(lo.x,hi.x,lo.y,hi.y);
-   bt[(c*2u+1u)*64u+r]=vec4<f16>(lo.z,hi.z,lo.w,hi.w);
+   let p0=nib2(word,0u);let p1=nib2(word,4u);let p2=nib2(word,8u);let p3=nib2(word,12u);
+   bt[c*2u*64u+r]=vec4<f16>(p0.x,p1.x,p2.x,p3.x);
+   bt[(c*2u+1u)*64u+r]=vec4<f16>(p0.y,p1.y,p2.y,p3.y);
    let uword=u[o];
-   let ulo=vec4<f16>(vec4<i32>((vec4<u32>(uword)>>vec4<u32>(0u,8u,16u,24u))&vec4<u32>(15u))-vec4<i32>(8));
-   let uhi=vec4<f16>(vec4<i32>((vec4<u32>(uword)>>vec4<u32>(4u,12u,20u,28u))&vec4<u32>(15u))-vec4<i32>(8));
-   ut[c*2u*64u+r]=vec4<f16>(ulo.x,uhi.x,ulo.y,uhi.y);
-   ut[(c*2u+1u)*64u+r]=vec4<f16>(ulo.z,uhi.z,ulo.w,uhi.w);
+   let up0=nib2(uword,0u);let up1=nib2(uword,4u);let up2=nib2(uword,8u);let up3=nib2(uword,12u);
+   ut[c*2u*64u+r]=vec4<f16>(up0.x,up1.x,up2.x,up3.x);
+   ut[(c*2u+1u)*64u+r]=vec4<f16>(up0.y,up1.y,up2.y,up3.y);
   }
  }
  if(lane<64u){sa[lane]=0.0;if(g.y*64u+lane<m){sa[lane]=bitcast<f32>(x[((g.y*64u+lane)*groups+group)*17u+16u]);}}

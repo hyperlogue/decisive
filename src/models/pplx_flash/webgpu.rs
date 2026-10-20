@@ -61,6 +61,13 @@ pub(super) struct Gpu {
     dispatch_count: Cell<usize>,
     delta_scan: &'static str,
     delta_scan_selection: serde_json::Value,
+    gemm_selection: serde_json::Value,
+    mlp_selection: serde_json::Value,
+    // Whether layers use the q4_mlp kernel when it is installed; startup selection may prefer the
+    // bitwise-equal unfused path.
+    fused_mlp: bool,
+    // The selected int8_gemm kernel's [rows, columns] tile, when it replaced the tuned one.
+    int8_gemm_tile: Option<[u32; 2]>,
     #[cfg(feature = "kernel-checks")]
     int8: Option<int8::State>,
     #[cfg(feature = "kernel-checks")]
@@ -199,6 +206,10 @@ impl Gpu {
             dispatch_count: Cell::new(0),
             delta_scan: "delta_scan",
             delta_scan_selection: serde_json::Value::Null,
+            gemm_selection: serde_json::Value::Null,
+            mlp_selection: serde_json::Value::Null,
+            fused_mlp: true,
+            int8_gemm_tile: None,
             #[cfg(feature = "kernel-checks")]
             int8: None,
             #[cfg(feature = "kernel-checks")]
@@ -242,9 +253,13 @@ impl Gpu {
             "gemm_tile":self.gemm_tile,"packed_projection_inputs":self.packed_inputs,
             "fused_mlp_tile":self.mlp_tile,"small_row_tile":self.small_tile,
             "tiled_attention":self.tiled_attention,"cooperative_norm":self.cooperative_norm,"batched_compute_passes":self.device.batch_passes.get(),
-            "cached_bindings":true,"fused_mlp_quantization":self.pipelines.contains_key("q4_mlp"),
+            "cached_bindings":true,"fused_mlp_quantization":self.fused_mlp&&self.pipelines.contains_key("q4_mlp"),
             "delta_scan":self.delta_scan,"delta_scan_selection":self.delta_scan_selection,
+            "gemm_selection":self.gemm_selection,"mlp_selection":self.mlp_selection,
             "timing":"wall-clock, synchronized per layer; not GPU timestamps"})
+    }
+    fn gemm_candidate_tile(name: &str) -> [u32; 2] {
+        if name == "int8_gemm_unrolled_32x64" { [32, 64] } else { [64, 64] }
     }
     pub fn discard_scratch(&self) {
         self.packed_cache.borrow_mut().clear();
@@ -385,16 +400,20 @@ impl Gpu {
         let int8_tile = [64, 64];
         #[cfg(feature = "kernel-checks")]
         let int8_tile = self.int8.as_ref().map_or(int8_tile, |s| s.tile);
-        let groups = if name == "int8_input" && self.grouped_q4() {
+        let groups = if (name == "int8_input" || name == "int8_silu_input") && self.grouped_q4() {
             [params[0], params[2].div_ceil(256), 1]
         } else if name == "int8_input" || name == "int8_weight" || name == "q4_weight" {
             [params[0], 1, 1]
-        } else if name == "int8_gemm" || name == "int8_raw" {
-            [
-                params[1].div_ceil(int8_tile[1]),
-                params[0].div_ceil(int8_tile[0]),
-                1,
-            ]
+        } else if matches!(
+            name,
+            "int8_gemm" | "int8_raw" | "int8_gemm_unrolled_64x64" | "int8_gemm_unrolled_32x64" | "int8_gemm_r4x8"
+        ) {
+            let tile = match name {
+                "int8_gemm" => self.int8_gemm_tile.unwrap_or(int8_tile),
+                "int8_raw" => int8_tile,
+                candidate => Self::gemm_candidate_tile(candidate),
+            };
+            [params[1].div_ceil(tile[1]), params[0].div_ceil(tile[0]), 1]
         } else if name == "int8_gemm_narrow" {
             [params[1].div_ceil(32), params[0].div_ceil(32), 1]
         } else if name == "int8_mlp" || name == "q4_mlp" {
@@ -837,7 +856,7 @@ impl Gpu {
         #[allow(unused_mut)]
         let mut quantized_down: Option<Buffer> = None;
         #[cfg(feature = "kernel-checks")]
-        if int8_mlp.is_some() && self.grouped_q4() && self.pipelines.contains_key("q4_mlp") {
+        if int8_mlp.is_some() && self.grouped_q4() && self.fused_mlp && self.pipelines.contains_key("q4_mlp") {
             let input = self.int8_input(&mut e, &norm, nq, D)?;
             let output = self.empty(nq * (9216 / 64) * 17)?;
             self.run(
@@ -872,6 +891,20 @@ impl Gpu {
                 0,
             )?;
             quantized_activated = Some(output);
+        }
+        // Unfused grouped path: the SiLU product goes straight into down_proj's quantized input.
+        #[cfg(feature = "kernel-checks")]
+        if int8_mlp.is_some()
+            && self.grouped_q4()
+            && quantized_down.is_none()
+            && quantized_activated.is_none()
+            && self.pipelines.contains_key("int8_silu_input")
+        {
+            let gate = self.linear(&mut e, &norm, get("mlp.gate_proj.weight", &[9216, D])?, nq, D, 9216)?;
+            let up = self.linear(&mut e, &norm, get("mlp.up_proj.weight", &[9216, D])?, nq, D, 9216)?;
+            let output = self.empty(nq * (9216 / 64) * 17)?;
+            self.run(&mut e, "int8_silu_input", [&gate, &up, &self.dummy, &output], &[nq, 0, 9216], 0)?;
+            quantized_down = Some(output);
         }
         let activated = if let Some(output) = quantized_activated {
             output

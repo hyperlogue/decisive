@@ -23,7 +23,8 @@ fn main() {
     for (k, v) in [("norm", NORM), ("point", POINT), ("conv", CONV), ("delta_qk", DELTA_QK),
         ("delta_params", DELTA_PARAMS), ("delta_constants", DELTA_CONSTANTS), ("delta_gate", DELTA_GATE),
         ("attention_norm", ATTENTION_NORM), ("softmax", SOFTMAX), ("scores", SCORES_TILED), ("values", VALUES_TILED),
-        ("norm_cooperative", NORM_COOPERATIVE), ("delta_scan_chained", DELTA_SCAN_CHAINED)] {
+        ("norm_cooperative", NORM_COOPERATIVE), ("delta_scan_chained", DELTA_SCAN_CHAINED),
+        ("delta_scan_staged", DELTA_SCAN_STAGED)] {
         m.insert(k.to_string(), source(v));
     }
     m.insert("delta_scan".into(), source(&delta_scan_four()));
