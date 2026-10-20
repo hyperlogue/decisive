@@ -404,28 +404,28 @@ pub(super) fn delta_scan_four() -> String {
 }
 // Two threads hold halves of each 128-element state column, 32 columns per workgroup. Each
 // serial sum runs over the first half, then continues from the carried partial over the second,
-// so the result matches DELTA_SCAN bit for bit while halving per-thread state. q/k for four
+// so the result matches DELTA_SCAN bit for bit while halving per-thread state. q/k for eight
 // tokens are staged in workgroup memory.
 #[cfg(feature = "kernel-checks")]
 pub(super) const DELTA_SCAN_CHAINED: &str = r#"
-var<workgroup> kq:array<vec4<f32>,256>;
-var<workgroup> gb:array<f32,8>;
+var<workgroup> kq:array<vec4<f32>,512>;
+var<workgroup> gb:array<f32,16>;
 var<workgroup> carry:array<f32,32>;
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wg:vec3<u32>, @builtin(local_invocation_index) l:u32) {
     let part=l/32u; let col=l%32u; let gid=wg.x*32u+col; let h=gid/128u; let c=gid%128u;
     let first=part*16u;
     var state:array<f32,64>;
-    for(var t0=0u;t0<p.a.x;t0+=4u) {
+    for(var t0=0u;t0<p.a.x;t0+=8u) {
         workgroupBarrier();
-        for(var i=l;i<256u;i+=64u) {
+        for(var i=l;i<512u;i+=64u) {
             let t=t0+i/64u; let j=i%64u; var v=vec4<f32>(0.0);
             if(t<p.a.x) { let o=t*8192u+(h/2u)*128u+select(j*4u,2048u+(j-32u)*4u,j>=32u); v=vec4<f32>(x[o],x[o+1u],x[o+2u],x[o+3u]); }
             kq[i]=v;
         }
-        for(var i=l;i<8u;i+=64u) { let t=t0+i/2u; gb[i]=select(0.0,wf((t*32u+h)*2u+i%2u),t<p.a.x); }
+        for(var i=l;i<16u;i+=64u) { let t=t0+i/2u; gb[i]=select(0.0,wf((t*32u+h)*2u+i%2u),t<p.a.x); }
         workgroupBarrier();
-        let end=min(4u,p.a.x-t0);
+        let end=min(8u,p.a.x-t0);
         for(var tt=0u;tt<end;tt++) {
             let t=t0+tt; let g=gb[tt*2u]; let beta=gb[tt*2u+1u];
             for(var i=0u;i<64u;i++) { state[i]*=g; }
@@ -455,6 +455,49 @@ fn main(@builtin(workgroup_id) wg:vec3<u32>, @builtin(local_invocation_index) l:
         }
     }
 }
+"#;
+// One thread per state column like DELTA_SCAN, with q/k for four tokens staged in workgroup
+// memory; the arithmetic order is DELTA_SCAN's.
+#[cfg(feature = "kernel-checks")]
+pub(super) const DELTA_SCAN_STAGED: &str = r#"
+var<workgroup> kq:array<vec4<f32>,256>;
+var<workgroup> gb:array<f32,8>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wg:vec3<u32>, @builtin(local_invocation_index) l:u32) {
+    let gid=wg.x*64u+l; let h=gid/128u; let c=gid%128u;
+    var state:array<f32,128>;
+    for(var t0=0u;t0<p.a.x;t0+=4u) {
+        workgroupBarrier();
+        for(var i=l;i<256u;i+=64u) {
+            let t=t0+i/64u; let j=i%64u; var v=vec4<f32>(0.0);
+            if(t<p.a.x) { let o=t*8192u+(h/2u)*128u+select(j*4u,2048u+(j-32u)*4u,j>=32u); v=vec4<f32>(x[o],x[o+1u],x[o+2u],x[o+3u]); }
+            kq[i]=v;
+        }
+        for(var i=l;i<8u;i+=64u) { let t=t0+i/2u; gb[i]=select(0.0,wf((t*32u+h)*2u+i%2u),t<p.a.x); }
+        workgroupBarrier();
+        let end=min(4u,p.a.x-t0);
+        for(var tt=0u;tt<end;tt++) {
+            let t=t0+tt; let g=gb[tt*2u]; let beta=gb[tt*2u+1u];
+            var memory=0.0;
+            for(var b=0u;b<32u;b++) { let kv=kq[tt*64u+32u+b];
+                state[b*4u+0u]*=g; memory+=state[b*4u+0u]*kv.x;
+                state[b*4u+1u]*=g; memory+=state[b*4u+1u]*kv.y;
+                state[b*4u+2u]*=g; memory+=state[b*4u+2u]*kv.z;
+                state[b*4u+3u]*=g; memory+=state[b*4u+3u]*kv.w;
+            }
+            let delta=(x[t*8192u+4096u+h*128u+c]-memory)*beta;
+            var sum=0.0;
+            for(var b=0u;b<32u;b++) { let kv=kq[tt*64u+32u+b]; let qv=kq[tt*64u+b];
+                state[b*4u+0u]+=kv.x*delta; sum+=state[b*4u+0u]*qv.x;
+                state[b*4u+1u]+=kv.y*delta; sum+=state[b*4u+1u]*qv.y;
+                state[b*4u+2u]+=kv.z*delta; sum+=state[b*4u+2u]*qv.z;
+                state[b*4u+3u]+=kv.w*delta; sum+=state[b*4u+3u]*qv.w;
+            }
+            y[t*4096u+h*128u+c]=sum;
+        }
+    }
+}
+
 "#;
 pub(super) const DELTA_GATE: &str = r#"
 @compute @workgroup_size(64)
@@ -521,65 +564,123 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
 }
 "#;
 
+// Tiled attention: rows are (query, head) pairs of one KV head so the four query heads share each K/V tile.
+// Every output keeps the reference kernels' sequential fma order, so results are bitwise identical.
 #[cfg(feature = "kernel-checks")]
 pub(super) const SCORES_TILED: &str = r#"
-var<workgroup> qa:array<f32,512>;
-var<workgroup> kb:array<f32,512>;
+var<workgroup> qa:array<vec4<f32>,288>;
+var<workgroup> kb:array<vec4<f32>,288>;
 @compute @workgroup_size(8,8)
 fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_id) l:vec3<u32>) {
- let nk=p.a.x;let rows=p.a.y;let h=g.z;
- let row=g.y*16u+l.y*2u;let col=g.x*16u+l.x*2u;
- var s0=vec2<f32>(0.0);var s1=s0;
+ let nk=p.a.x;let rows=p.a.y;
+ var s0_0=0.0; var s0_1=0.0; var s0_2=0.0; var s0_3=0.0;
+ var s1_0=0.0; var s1_1=0.0; var s1_2=0.0; var s1_3=0.0;
+ var s2_0=0.0; var s2_1=0.0; var s2_2=0.0; var s2_3=0.0;
+ var s3_0=0.0; var s3_1=0.0; var s3_2=0.0; var s3_3=0.0;
  for(var first=0u;first<256u;first+=32u){
-  for(var i=l.y*8u+l.x;i<512u;i+=64u){
-   let r=i/32u;let c=i%32u;qa[i]=0.0;kb[c*16u+r]=0.0;
-   if(g.y*16u+r<rows){qa[i]=x[(g.y*16u+r+p.a.z)*4096u+h*256u+first+c];}
-   if(g.x*16u+r<nk){kb[c*16u+r]=wf((g.x*16u+r)*1024u+(h/4u)*256u+first+c);}
+  for(var i=l.y*8u+l.x;i<256u;i+=64u){
+   let r=i/8u;let c=(i%8u)*4u;let m=g.y*32u+r;var a=vec4<f32>(0.0);var b=vec4<f32>(0.0);
+   if(m<rows*4u){let o=(m/4u+p.a.z)*4096u+(g.z*4u+m%4u)*256u+first+c;a=vec4<f32>(x[o],x[o+1u],x[o+2u],x[o+3u]);}
+   if(g.x*32u+r<nk){let o=(g.x*32u+r)*1024u+g.z*256u+first+c;b=vec4<f32>(wf(o),wf(o+1u),wf(o+2u),wf(o+3u));}
+   qa[r*9u+i%8u]=a;kb[r*9u+i%8u]=b;
   }
   workgroupBarrier();
-  for(var j=0u;j<32u;j++){
-   let at=j*16u+l.x*2u;let b=vec2<f32>(kb[at],kb[at+1u]);
-   s0=fma(vec2<f32>(qa[l.y*2u*32u+j]),b,s0);
-   s1=fma(vec2<f32>(qa[(l.y*2u+1u)*32u+j]),b,s1);
+  for(var j=0u;j<8u;j++){
+   let b0=kb[(l.x+0u)*9u+j];
+   let b1=kb[(l.x+8u)*9u+j];
+   let b2=kb[(l.x+16u)*9u+j];
+   let b3=kb[(l.x+24u)*9u+j];
+   let a0=qa[(l.y+0u)*9u+j];s0_0=fma(a0.w,b0.w,fma(a0.z,b0.z,fma(a0.y,b0.y,fma(a0.x,b0.x,s0_0))));s0_1=fma(a0.w,b1.w,fma(a0.z,b1.z,fma(a0.y,b1.y,fma(a0.x,b1.x,s0_1))));s0_2=fma(a0.w,b2.w,fma(a0.z,b2.z,fma(a0.y,b2.y,fma(a0.x,b2.x,s0_2))));s0_3=fma(a0.w,b3.w,fma(a0.z,b3.z,fma(a0.y,b3.y,fma(a0.x,b3.x,s0_3))));
+   let a1=qa[(l.y+8u)*9u+j];s1_0=fma(a1.w,b0.w,fma(a1.z,b0.z,fma(a1.y,b0.y,fma(a1.x,b0.x,s1_0))));s1_1=fma(a1.w,b1.w,fma(a1.z,b1.z,fma(a1.y,b1.y,fma(a1.x,b1.x,s1_1))));s1_2=fma(a1.w,b2.w,fma(a1.z,b2.z,fma(a1.y,b2.y,fma(a1.x,b2.x,s1_2))));s1_3=fma(a1.w,b3.w,fma(a1.z,b3.z,fma(a1.y,b3.y,fma(a1.x,b3.x,s1_3))));
+   let a2=qa[(l.y+16u)*9u+j];s2_0=fma(a2.w,b0.w,fma(a2.z,b0.z,fma(a2.y,b0.y,fma(a2.x,b0.x,s2_0))));s2_1=fma(a2.w,b1.w,fma(a2.z,b1.z,fma(a2.y,b1.y,fma(a2.x,b1.x,s2_1))));s2_2=fma(a2.w,b2.w,fma(a2.z,b2.z,fma(a2.y,b2.y,fma(a2.x,b2.x,s2_2))));s2_3=fma(a2.w,b3.w,fma(a2.z,b3.z,fma(a2.y,b3.y,fma(a2.x,b3.x,s2_3))));
+   let a3=qa[(l.y+24u)*9u+j];s3_0=fma(a3.w,b0.w,fma(a3.z,b0.z,fma(a3.y,b0.y,fma(a3.x,b0.x,s3_0))));s3_1=fma(a3.w,b1.w,fma(a3.z,b1.z,fma(a3.y,b1.y,fma(a3.x,b1.x,s3_1))));s3_2=fma(a3.w,b2.w,fma(a3.z,b2.z,fma(a3.y,b2.y,fma(a3.x,b2.x,s3_2))));s3_3=fma(a3.w,b3.w,fma(a3.z,b3.z,fma(a3.y,b3.y,fma(a3.x,b3.x,s3_3))));
   }
   workgroupBarrier();
  }
- for(var c=0u;c<2u;c++){if(col+c<nk){
-  if(row<rows){y[(row*16u+h)*nk+col+c]=s0[c]/16.0;}
-  if(row+1u<rows){y[((row+1u)*16u+h)*nk+col+c]=s1[c]/16.0;}
- }}
+ {let m=g.y*32u+l.y+0u;let col=g.x*32u+l.x+0u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s0_0/16.0;}}
+ {let m=g.y*32u+l.y+0u;let col=g.x*32u+l.x+8u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s0_1/16.0;}}
+ {let m=g.y*32u+l.y+0u;let col=g.x*32u+l.x+16u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s0_2/16.0;}}
+ {let m=g.y*32u+l.y+0u;let col=g.x*32u+l.x+24u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s0_3/16.0;}}
+ {let m=g.y*32u+l.y+8u;let col=g.x*32u+l.x+0u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s1_0/16.0;}}
+ {let m=g.y*32u+l.y+8u;let col=g.x*32u+l.x+8u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s1_1/16.0;}}
+ {let m=g.y*32u+l.y+8u;let col=g.x*32u+l.x+16u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s1_2/16.0;}}
+ {let m=g.y*32u+l.y+8u;let col=g.x*32u+l.x+24u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s1_3/16.0;}}
+ {let m=g.y*32u+l.y+16u;let col=g.x*32u+l.x+0u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s2_0/16.0;}}
+ {let m=g.y*32u+l.y+16u;let col=g.x*32u+l.x+8u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s2_1/16.0;}}
+ {let m=g.y*32u+l.y+16u;let col=g.x*32u+l.x+16u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s2_2/16.0;}}
+ {let m=g.y*32u+l.y+16u;let col=g.x*32u+l.x+24u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s2_3/16.0;}}
+ {let m=g.y*32u+l.y+24u;let col=g.x*32u+l.x+0u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s3_0/16.0;}}
+ {let m=g.y*32u+l.y+24u;let col=g.x*32u+l.x+8u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s3_1/16.0;}}
+ {let m=g.y*32u+l.y+24u;let col=g.x*32u+l.x+16u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s3_2/16.0;}}
+ {let m=g.y*32u+l.y+24u;let col=g.x*32u+l.x+24u;if(m<rows*4u&&col<nk){y[((m/4u)*16u+g.z*4u+m%4u)*nk+col]=s3_3/16.0;}}
 }
 "#;
 
 #[cfg(feature = "kernel-checks")]
 pub(super) const VALUES_TILED: &str = r#"
-var<workgroup> pa:array<f32,512>;
-var<workgroup> vb:array<f32,1024>;
+var<workgroup> pa:array<vec4<f32>,320>;
+var<workgroup> vb:array<vec4<f32>,128>;
 @compute @workgroup_size(8,8)
 fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_id) l:vec3<u32>) {
- let nk=p.a.x;let rows=p.a.y;let h=g.z;
- let row=g.y*16u+l.y*2u;let col=g.x*32u+l.x*4u;
- var s0=vec4<f32>(0.0);var s1=s0;
- for(var first=0u;first<nk;first+=32u){
-  for(var i=l.y*8u+l.x;i<512u;i+=64u){
-   let r=i/32u;let c=i%32u;pa[i]=0.0;
-   if(g.y*16u+r<rows && first+c<nk){pa[i]=x[((g.y*16u+r)*16u+h)*nk+first+c];}
+ let nk=p.a.x;let rows=p.a.y;let lane=l.y*8u+l.x;
+ var s0_0=vec4<f32>(0.0);
+ var s1_0=vec4<f32>(0.0);
+ var s2_0=vec4<f32>(0.0);
+ var s3_0=vec4<f32>(0.0);
+ var s4_0=vec4<f32>(0.0);
+ var s5_0=vec4<f32>(0.0);
+ var s6_0=vec4<f32>(0.0);
+ var s7_0=vec4<f32>(0.0);
+ for(var first=0u;first<nk;first+=16u){
+  for(var i=lane;i<256u;i+=64u){
+   let r=i/4u;let c=(i%4u)*4u;let m=g.y*64u+r;var v=vec4<f32>(0.0);
+   if(m<rows*4u){let o=((m/4u)*16u+g.z*4u+m%4u)*nk+first+c;
+    for(var e=0u;e<4u;e++){if(first+c+e<nk){v[e]=x[o+e];}}}
+   pa[r*5u+i%4u]=v;
   }
-  for(var i=l.y*8u+l.x;i<1024u;i+=64u){
-   let r=i/32u;let c=i%32u;vb[i]=0.0;
-   if(first+r<nk){vb[i]=wf((first+r)*1024u+(h/4u)*256u+g.x*32u+c);}
+  for(var i=lane;i<128u;i+=64u){
+   let r=i/8u;let c=(i%8u)*4u;vb[i]=vec4<f32>(0.0);
+   if(first+r<nk){let o=(first+r)*1024u+g.z*256u+g.x*32u+c;vb[i]=vec4<f32>(wf(o),wf(o+1u),wf(o+2u),wf(o+3u));}
   }
   workgroupBarrier();
-  for(var j=0u;j<min(32u,nk-first);j++){
-   let at=j*32u+l.x*4u;let b=vec4<f32>(vb[at],vb[at+1u],vb[at+2u],vb[at+3u]);
-   s0=fma(vec4<f32>(pa[l.y*2u*32u+j]),b,s0);
-   s1=fma(vec4<f32>(pa[(l.y*2u+1u)*32u+j]),b,s1);
+  for(var j=0u;j<4u;j++){
+   let a0=pa[(l.y+0u)*5u+j];
+   let a1=pa[(l.y+8u)*5u+j];
+   let a2=pa[(l.y+16u)*5u+j];
+   let a3=pa[(l.y+24u)*5u+j];
+   let a4=pa[(l.y+32u)*5u+j];
+   let a5=pa[(l.y+40u)*5u+j];
+   let a6=pa[(l.y+48u)*5u+j];
+   let a7=pa[(l.y+56u)*5u+j];
+   for(var e=0u;e<4u;e++){
+    let b0=vb[(j*4u+e)*8u+l.x+0u];
+    s0_0=fma(vec4<f32>(a0[e]),b0,s0_0);
+    s1_0=fma(vec4<f32>(a1[e]),b0,s1_0);
+    s2_0=fma(vec4<f32>(a2[e]),b0,s2_0);
+    s3_0=fma(vec4<f32>(a3[e]),b0,s3_0);
+    s4_0=fma(vec4<f32>(a4[e]),b0,s4_0);
+    s5_0=fma(vec4<f32>(a5[e]),b0,s5_0);
+    s6_0=fma(vec4<f32>(a6[e]),b0,s6_0);
+    s7_0=fma(vec4<f32>(a7[e]),b0,s7_0);
+   }
   }
   workgroupBarrier();
  }
- for(var c=0u;c<4u;c++){
-  if(row<rows){let q=row+p.a.z;y[q*4096u+h*256u+col+c]=s0[c]*sigmoid(af((q*16u+h)*512u+256u+col+c));}
-  if(row+1u<rows){let q=row+1u+p.a.z;y[q*4096u+h*256u+col+c]=s1[c]*sigmoid(af((q*16u+h)*512u+256u+col+c));}
- }
+ {let m=g.y*64u+l.y+0u;if(m<rows*4u){let q=m/4u+p.a.z;let h=g.z*4u+m%4u;let col=g.x*32u+(l.x+0u)*4u;
+  for(var e=0u;e<4u;e++){y[q*4096u+h*256u+col+e]=s0_0[e]*sigmoid(af((q*16u+h)*512u+256u+col+e));}}}
+ {let m=g.y*64u+l.y+8u;if(m<rows*4u){let q=m/4u+p.a.z;let h=g.z*4u+m%4u;let col=g.x*32u+(l.x+0u)*4u;
+  for(var e=0u;e<4u;e++){y[q*4096u+h*256u+col+e]=s1_0[e]*sigmoid(af((q*16u+h)*512u+256u+col+e));}}}
+ {let m=g.y*64u+l.y+16u;if(m<rows*4u){let q=m/4u+p.a.z;let h=g.z*4u+m%4u;let col=g.x*32u+(l.x+0u)*4u;
+  for(var e=0u;e<4u;e++){y[q*4096u+h*256u+col+e]=s2_0[e]*sigmoid(af((q*16u+h)*512u+256u+col+e));}}}
+ {let m=g.y*64u+l.y+24u;if(m<rows*4u){let q=m/4u+p.a.z;let h=g.z*4u+m%4u;let col=g.x*32u+(l.x+0u)*4u;
+  for(var e=0u;e<4u;e++){y[q*4096u+h*256u+col+e]=s3_0[e]*sigmoid(af((q*16u+h)*512u+256u+col+e));}}}
+ {let m=g.y*64u+l.y+32u;if(m<rows*4u){let q=m/4u+p.a.z;let h=g.z*4u+m%4u;let col=g.x*32u+(l.x+0u)*4u;
+  for(var e=0u;e<4u;e++){y[q*4096u+h*256u+col+e]=s4_0[e]*sigmoid(af((q*16u+h)*512u+256u+col+e));}}}
+ {let m=g.y*64u+l.y+40u;if(m<rows*4u){let q=m/4u+p.a.z;let h=g.z*4u+m%4u;let col=g.x*32u+(l.x+0u)*4u;
+  for(var e=0u;e<4u;e++){y[q*4096u+h*256u+col+e]=s5_0[e]*sigmoid(af((q*16u+h)*512u+256u+col+e));}}}
+ {let m=g.y*64u+l.y+48u;if(m<rows*4u){let q=m/4u+p.a.z;let h=g.z*4u+m%4u;let col=g.x*32u+(l.x+0u)*4u;
+  for(var e=0u;e<4u;e++){y[q*4096u+h*256u+col+e]=s6_0[e]*sigmoid(af((q*16u+h)*512u+256u+col+e));}}}
+ {let m=g.y*64u+l.y+56u;if(m<rows*4u){let q=m/4u+p.a.z;let h=g.z*4u+m%4u;let col=g.x*32u+(l.x+0u)*4u;
+  for(var e=0u;e<4u;e++){y[q*4096u+h*256u+col+e]=s7_0[e]*sigmoid(af((q*16u+h)*512u+256u+col+e));}}}
 }
 "#;

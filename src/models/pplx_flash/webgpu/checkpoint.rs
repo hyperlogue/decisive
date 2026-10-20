@@ -52,6 +52,8 @@ impl Gpu {
             (mode, Some("delta_scan_chained"))
         } else if let Some(mode) = mode.strip_suffix("-scan-baseline") {
             (mode, Some("delta_scan"))
+        } else if let Some(mode) = mode.strip_suffix("-scan-staged") {
+            (mode, Some("delta_scan_staged"))
         } else {
             (mode, None)
         };
@@ -174,6 +176,8 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         if gpu.grouped_q4() {
             gpu.install_pipeline("delta_scan_chained", shaders::source(shaders::DELTA_SCAN_CHAINED))
                 .await?;
+            gpu.install_pipeline("delta_scan_staged", shaders::source(shaders::DELTA_SCAN_STAGED))
+                .await?;
             gpu.select_delta_scan(forced_scan).await?;
             // Both match the tuned projection kernel bit for bit, so they require that kernel.
             if wide {
@@ -191,11 +195,11 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         Ok(gpu)
     }
 
-    // The chained scan keeps the baseline's summation order, so it must match bit for bit; it
-    // is kept only when this device's compiler preserves that and it is measurably faster.
+    // The chained and staged scans keep the baseline's summation order, so they must match bit for bit;
+    // the fastest one this device's compiler preserves that for is kept if measurably faster.
     async fn select_delta_scan(&mut self, forced: Option<&'static str>) -> Result<()> {
         const ROWS: usize = 128;
-        const CANDIDATES: [&str; 2] = ["delta_scan", "delta_scan_chained"];
+        const CANDIDATES: [&str; 3] = ["delta_scan", "delta_scan_chained", "delta_scan_staged"];
         // Unit-scale q/k/v and decays below one, like delta_qk and delta_params outputs.
         let qk: Vec<f32> = (0..ROWS * 8192)
             .map(|i| ((i * 7919 % 2003) as f32 / 1001.5 - 1.) * 0.09)
@@ -208,8 +212,9 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         let outputs = [
             self.device.empty(ROWS * 4096, "scan selection output")?,
             self.device.empty(ROWS * 4096, "scan selection output")?,
+            self.device.empty(ROWS * 4096, "scan selection output")?,
         ];
-        let mut best = [f64::INFINITY; 2];
+        let mut best = [f64::INFINITY; 3];
         for round in 0..4 {
             for (i, name) in CANDIDATES.iter().enumerate() {
                 let mut encoder = self.device.encoder();
@@ -225,21 +230,29 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             }
         }
         let baseline = self.device.read(self.device.encoder(), &outputs[0], ROWS * 4096).await?;
-        let chained = self.device.read(self.device.encoder(), &outputs[1], ROWS * 4096).await?;
-        let difference = baseline.iter().zip(&chained).fold(0f32, |a, (x, y)| a.max((x - y).abs()));
-        let agrees = baseline.iter().zip(&chained).all(|(x, y)| x.to_bits() == y.to_bits());
+        let mut difference = 0f32;
+        let mut agrees = [true; 3];
+        for i in 1..3 {
+            let candidate = self.device.read(self.device.encoder(), &outputs[i], ROWS * 4096).await?;
+            difference = baseline.iter().zip(&candidate).fold(difference, |a, (x, y)| a.max((x - y).abs()));
+            agrees[i] = baseline.iter().zip(&candidate).all(|(x, y)| x.to_bits() == y.to_bits());
+        }
+        let fastest = (1..3)
+            .filter(|&i| agrees[i] && best[i] < best[0] * 0.97)
+            .min_by(|&a, &b| best[a].total_cmp(&best[b]));
         self.delta_scan = match forced {
             Some(name) => name,
-            None if agrees && best[1] < best[0] * 0.97 => CANDIDATES[1],
-            None => CANDIDATES[0],
+            None => CANDIDATES[fastest.unwrap_or(0)],
         };
         self.delta_scan_selection = serde_json::json!({"forced":forced.is_some(),"rows":ROWS,
-            "baseline_ms":best[0],"chained_ms":best[1],"max_abs_difference":difference,"agrees":agrees});
+            "baseline_ms":best[0],"chained_ms":best[1],"staged_ms":best[2],"max_abs_difference":difference,
+            "agrees":agrees[1]&&agrees[2],"chained_agrees":agrees[1],"staged_agrees":agrees[2]});
         for buffer in [qk, gates].into_iter().chain(outputs) {
             buffer.destroy();
         }
         self.device.discard_pending();
-        ensure!(agrees || forced.is_none(), "chained delta scan disagrees with the baseline");
+        let forced_agrees = CANDIDATES.iter().zip(agrees).all(|(name, ok)| ok || forced != Some(*name));
+        ensure!(forced_agrees, "forced delta scan disagrees with the baseline");
         Ok(())
     }
 

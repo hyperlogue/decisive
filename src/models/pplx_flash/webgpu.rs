@@ -386,7 +386,7 @@ impl Gpu {
         #[cfg(feature = "kernel-checks")]
         let int8_tile = self.int8.as_ref().map_or(int8_tile, |s| s.tile);
         let groups = if name == "int8_input" && self.grouped_q4() {
-            [params[0], params[2] / 64, 1]
+            [params[0], params[2].div_ceil(256), 1]
         } else if name == "int8_input" || name == "int8_weight" || name == "q4_weight" {
             [params[0], 1, 1]
         } else if name == "int8_gemm" || name == "int8_raw" {
@@ -402,12 +402,15 @@ impl Gpu {
         } else if name == "delta_scan_chained" {
             // 32 state columns per workgroup: 32 heads * 128 columns / 32.
             [128, 1, 1]
+        } else if name == "delta_scan_staged" {
+            [64, 1, 1]
         } else if (self.cooperative_norm && name == "norm") || name == "norm_cooperative" {
             [params[0], 1, 1]
         } else if self.tiled_attention && name == "scores" {
-            [params[0].div_ceil(16), params[1].div_ceil(16), 16]
+            // 32 keys x 32 (query, head) rows per workgroup; one KV head per z.
+            [params[0].div_ceil(32), (params[1] * 4).div_ceil(32), 4]
         } else if self.tiled_attention && name == "values" {
-            [8, params[1].div_ceil(16), 16]
+            [8, (params[1] * 4).div_ceil(64), 4]
         } else if name == "gemm_small" || name == "mlp_small" {
             let tile = small.unwrap();
             [params[1].div_ceil(tile[1]), params[0].div_ceil(tile[0]), 1]

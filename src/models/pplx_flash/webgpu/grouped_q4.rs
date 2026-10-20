@@ -8,16 +8,20 @@ struct Params { a:vec4<u32>, b:vec4<u32>, c:vec4<u32>, d:vec4<u32> }
 @group(0) @binding(4) var<uniform> p:Params;
 var<workgroup> maxima:array<f32,64>;
 fn even(v:f32)->i32 {let lo=floor(v);let f=v-lo;return i32(lo)+select(0,1,f>0.5||(f==0.5&&(i32(lo)&1)==1));}
+// Four 64-value groups per workgroup, 16 threads per group, four values per thread.
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_index) l:u32){
- let first=g.x*p.a.z+g.y*64u;let out=(g.x*(p.a.z/64u)+g.y)*17u;
- maxima[l]=abs(x[first+l]);workgroupBarrier();
- for(var s=32u;s>0u;s/=2u){if(l<s){maxima[l]=max(maxima[l],maxima[l+s]);}workgroupBarrier();}
- let scale=max(maxima[0]/127.0,1.1754943508222875e-38);let inverse=1.0/scale;
- if(l==0u){y[out+16u]=bitcast<u32>(scale);}
- if(l<16u){var word=0u;for(var j=0u;j<4u;j++){
-  let q=clamp(even(x[first+l*4u+j]*inverse),-127,127);word|=(u32(q)&255u)<<(8u*j);
- }y[out+l]=word;}
+ let group=g.y*4u+l/16u;let lane=l%16u;let valid=group<p.a.z/64u;
+ let first=g.x*p.a.z+group*64u+lane*4u;let out=(g.x*(p.a.z/64u)+group)*17u;
+ var v=vec4<f32>(0.0);if(valid){v=vec4<f32>(x[first],x[first+1u],x[first+2u],x[first+3u]);}
+ let a=abs(v);maxima[l]=max(max(a.x,a.y),max(a.z,a.w));workgroupBarrier();
+ for(var s=8u;s>0u;s/=2u){if(lane<s){maxima[l]=max(maxima[l],maxima[l+s]);}workgroupBarrier();}
+ let scale=max(maxima[l-lane]/127.0,1.1754943508222875e-38);let inverse=1.0/scale;
+ if(!valid){return;}
+ if(lane==0u){y[out+16u]=bitcast<u32>(scale);}
+ var word=0u;for(var j=0u;j<4u;j++){
+  let q=clamp(even(v[j]*inverse),-127,127);word|=(u32(q)&255u)<<(8u*j);
+ }y[out+lane]=word;
 }"#.into()
 }
 

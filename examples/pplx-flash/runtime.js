@@ -57,10 +57,17 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
   const pendingReads=new Map();
   function loadLayer(layer,prefetch) {
     const ranges=packed?packedManifest.layers[layer].tensors.map(t=>({...t,file:layer+2})):JSON.parse(model.ranges(layer));
-    const groups=[...new Set(ranges.map(r=>r.file))].map(file=>{
-      const group=ranges.filter(r=>r.file===file);
-      return {group,file,lo:Math.min(...group.map(r=>r.start)),hi:Math.max(...group.map(r=>r.end))};
-    });
+    // Split each file into tensor-aligned reads of at least 4 MiB: concurrent
+    // range reads are substantially faster than one large read, and aligned
+    // splits let every tensor be staged without reassembly.
+    const groups=[];
+    for(const file of new Set(ranges.map(r=>r.file))){
+      let current=null;
+      for(const r of ranges.filter(r=>r.file===file).sort((a,b)=>a.start-b.start)){
+        if(!current||current.hi-current.lo>=4<<20)groups.push(current={group:[],file,lo:r.start,hi:r.end});
+        current.group.push(r);current.hi=Math.max(current.hi,r.end);
+      }
+    }
     if(!prefetch)return Promise.all(groups.map(async g=>({...g,bytes:await read(files[g.file],g.lo,g.hi)})));
     if(!worker){
       worker=new Worker(new URL('./read-worker.js',import.meta.url),{type:'module'});
