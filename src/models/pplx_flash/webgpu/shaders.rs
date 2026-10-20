@@ -284,21 +284,30 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
     for(var i=0u;i<d;i++) { y[row*d+i]=(x[row*d+i]*scale)*(1.0+bf(i)); }
 }
 "#;
+// One workgroup per row: coalesced 512-value tiles in workgroup memory, with one thread
+// summing them in NORM's order so the output matches NORM bit for bit. Requires d % 4 == 0.
 #[cfg(feature = "kernel-checks")]
 pub(super) const NORM_COOPERATIVE: &str = r#"
-var<workgroup> row_values:array<f32,2560>;
+var<workgroup> tile:array<vec4<f32>,128>;
 var<workgroup> row_scale:f32;
 @compute @workgroup_size(64)
-fn main(@builtin(workgroup_id) g:vec3<u32>, @builtin(local_invocation_id) l:vec3<u32>) {
-    let row=g.x;let d=p.a.y;
-    for(var i=l.x;i<d;i+=64u){row_values[i]=x[row*d+i];}
-    workgroupBarrier();
-    if(l.x==0u){
-        var sum=0.0;for(var i=0u;i<d;i++){let v=row_values[i];sum+=v*v;}
-        row_scale=1.0/sqrt(sum/f32(d)+1e-6);
+fn main(@builtin(workgroup_id) g:vec3<u32>, @builtin(local_invocation_index) l:u32) {
+    let row=g.x; let d=p.a.y;
+    var sum=0.0;
+    for(var k=0u;k<d;k+=512u) {
+        for(var i=l;i<128u;i+=64u) {
+            let c=min(k+i*4u,d-4u); let o=row*d+c;
+            tile[i]=vec4<f32>(x[o],x[o+1u],x[o+2u],x[o+3u]);
+        }
+        workgroupBarrier();
+        if(l==0u) {
+            for(var j=0u;j<min(128u,(d-k)/4u);j++) { let v=tile[j]; sum+=v.x*v.x; sum+=v.y*v.y; sum+=v.z*v.z; sum+=v.w*v.w; }
+        }
+        workgroupBarrier();
     }
+    if(l==0u) { row_scale=1.0/sqrt(sum/f32(d)+1e-6); }
     workgroupBarrier();
-    for(var i=l.x;i<d;i+=64u){y[row*d+i]=(row_values[i]*row_scale)*(1.0+bf(i));}
+    for(var i=l;i<d;i+=64u) { y[row*d+i]=(x[row*d+i]*row_scale)*(1.0+bf(i)); }
 }
 "#;
 
@@ -393,6 +402,60 @@ pub(super) fn delta_scan_four() -> String {
             &loop_body(false),
         )
 }
+// Two threads hold halves of each 128-element state column, 32 columns per workgroup. Each
+// serial sum runs over the first half, then continues from the carried partial over the second,
+// so the result matches DELTA_SCAN bit for bit while halving per-thread state. q/k for four
+// tokens are staged in workgroup memory.
+#[cfg(feature = "kernel-checks")]
+pub(super) const DELTA_SCAN_CHAINED: &str = r#"
+var<workgroup> kq:array<vec4<f32>,256>;
+var<workgroup> gb:array<f32,8>;
+var<workgroup> carry:array<f32,32>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wg:vec3<u32>, @builtin(local_invocation_index) l:u32) {
+    let part=l/32u; let col=l%32u; let gid=wg.x*32u+col; let h=gid/128u; let c=gid%128u;
+    let first=part*16u;
+    var state:array<f32,64>;
+    for(var t0=0u;t0<p.a.x;t0+=4u) {
+        workgroupBarrier();
+        for(var i=l;i<256u;i+=64u) {
+            let t=t0+i/64u; let j=i%64u; var v=vec4<f32>(0.0);
+            if(t<p.a.x) { let o=t*8192u+(h/2u)*128u+select(j*4u,2048u+(j-32u)*4u,j>=32u); v=vec4<f32>(x[o],x[o+1u],x[o+2u],x[o+3u]); }
+            kq[i]=v;
+        }
+        for(var i=l;i<8u;i+=64u) { let t=t0+i/2u; gb[i]=select(0.0,wf((t*32u+h)*2u+i%2u),t<p.a.x); }
+        workgroupBarrier();
+        let end=min(4u,p.a.x-t0);
+        for(var tt=0u;tt<end;tt++) {
+            let t=t0+tt; let g=gb[tt*2u]; let beta=gb[tt*2u+1u];
+            for(var i=0u;i<64u;i++) { state[i]*=g; }
+            for(var s=0u;s<2u;s++) {
+                if(part==s) {
+                    var memory=select(carry[col],0.0,s==0u);
+                    for(var b=0u;b<16u;b++) { let kv=kq[tt*64u+32u+first+b];
+                        memory+=state[b*4u]*kv.x; memory+=state[b*4u+1u]*kv.y; memory+=state[b*4u+2u]*kv.z; memory+=state[b*4u+3u]*kv.w; }
+                    carry[col]=memory;
+                }
+                workgroupBarrier();
+            }
+            let delta=(x[t*8192u+4096u+h*128u+c]-carry[col])*beta;
+            workgroupBarrier();
+            for(var b=0u;b<16u;b++) { let kv=kq[tt*64u+32u+first+b];
+                state[b*4u]+=kv.x*delta; state[b*4u+1u]+=kv.y*delta; state[b*4u+2u]+=kv.z*delta; state[b*4u+3u]+=kv.w*delta; }
+            for(var s=0u;s<2u;s++) {
+                if(part==s) {
+                    var sum=select(carry[col],0.0,s==0u);
+                    for(var b=0u;b<16u;b++) { let qv=kq[tt*64u+first+b];
+                        sum+=state[b*4u]*qv.x; sum+=state[b*4u+1u]*qv.y; sum+=state[b*4u+2u]*qv.z; sum+=state[b*4u+3u]*qv.w; }
+                    carry[col]=sum;
+                    if(s==1u) { y[t*4096u+h*128u+c]=sum; }
+                }
+                workgroupBarrier();
+            }
+        }
+    }
+}
+"#;
 pub(super) const DELTA_GATE: &str = r#"
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id:vec3<u32>) {

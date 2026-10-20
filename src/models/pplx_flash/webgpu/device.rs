@@ -1,5 +1,8 @@
 use anyhow::{Context, Result, ensure};
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+};
 use wgpu::util::DeviceExt;
 
 struct PendingDispatch {
@@ -8,11 +11,8 @@ struct PendingDispatch {
     groups: [u32; 3],
 }
 
-// Own only this submission's uniforms. Later submissions must never be freed
-// by an earlier completion callback.
 pub(super) struct Completion {
     receive: futures_channel::oneshot::Receiver<()>,
-    uniforms: Vec<wgpu::Buffer>,
     #[cfg(not(target_arch = "wasm32"))]
     device: wgpu::Device,
 }
@@ -20,11 +20,7 @@ impl Completion {
     pub async fn wait(self) -> Result<()> {
         #[cfg(not(target_arch = "wasm32"))]
         self.device.poll(wgpu::PollType::wait_indefinitely())?;
-        let result = self.receive.await.context("GPU completion cancelled");
-        for uniform in self.uniforms {
-            uniform.destroy();
-        }
-        result
+        self.receive.await.context("GPU completion cancelled")
     }
 }
 
@@ -35,7 +31,10 @@ pub(super) struct Device {
     pub profile: Option<super::profile::Profile>,
     pub batch_passes: Cell<bool>,
     pending: RefCell<Vec<PendingDispatch>>,
-    uniforms: RefCell<Vec<wgpu::Buffer>>,
+    // Layers repeat the same parameters and mostly the same buffers. Cached uniforms are never
+    // rewritten, so queued layers may share them; reset() drops both caches between chunks.
+    cached_uniforms: RefCell<HashMap<[u32; 16], wgpu::Buffer>>,
+    cached_bindings: RefCell<HashMap<(wgpu::ComputePipeline, Vec<wgpu::Buffer>, [u32; 16]), wgpu::BindGroup>>,
 }
 impl Device {
     pub async fn with_features(features: wgpu::Features) -> Result<Self> {
@@ -67,7 +66,8 @@ impl Device {
         Ok(Self {
             batch_passes: Cell::new(false),
             pending: RefCell::new(Vec::new()),
-            uniforms: RefCell::new(Vec::new()),
+            cached_uniforms: RefCell::new(HashMap::new()),
+            cached_bindings: RefCell::new(HashMap::new()),
             profile: features
                 .contains(wgpu::Features::TIMESTAMP_QUERY)
                 .then(|| super::profile::Profile::new(&device)),
@@ -124,7 +124,8 @@ impl Device {
     }
     pub fn discard_pending(&self) {
         self.pending.borrow_mut().clear();
-        for uniform in self.uniforms.borrow_mut().drain(..) {
+        self.cached_bindings.borrow_mut().clear();
+        for (_, uniform) in self.cached_uniforms.borrow_mut().drain() {
             uniform.destroy();
         }
     }
@@ -142,14 +143,12 @@ impl Device {
         self.completion()
     }
     fn completion(&self) -> Completion {
-        let uniforms = self.uniforms.take();
         let (send, receive) = futures_channel::oneshot::channel();
         self.queue.on_submitted_work_done(move || {
             let _ = send.send(());
         });
         Completion {
             receive,
-            uniforms,
             #[cfg(not(target_arch = "wasm32"))]
             device: self.device.clone(),
         }
@@ -168,32 +167,45 @@ impl Device {
             groups.iter().all(|&n| n > 0 && n <= limit),
             "GPU dispatch exceeds device limits"
         );
-        // Uniforms live until submission completes; reusing one would overwrite earlier dispatches.
-        let uniform = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Pplx Flash dispatch parameters"),
-                contents: bytemuck::cast_slice(params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let mut entries: Vec<_> = buffers
-            .iter()
-            .enumerate()
-            .map(|(i, b)| wgpu::BindGroupEntry {
-                binding: i as u32,
-                resource: b.as_entire_binding(),
-            })
-            .collect();
-        entries.push(wgpu::BindGroupEntry {
-            binding: buffers.len() as u32,
-            resource: uniform.as_entire_binding(),
-        });
-        let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Pplx Flash dispatch"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &entries,
-        });
-        self.uniforms.borrow_mut().push(uniform);
+        let key = (pipeline.clone(), buffers.iter().map(|&b| b.clone()).collect(), *params);
+        let cached = self.cached_bindings.borrow().get(&key).cloned();
+        let bindings = match cached {
+            Some(bindings) => bindings,
+            None => {
+                let uniform = self
+                    .cached_uniforms
+                    .borrow_mut()
+                    .entry(*params)
+                    .or_insert_with(|| {
+                        self.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Pplx Flash dispatch parameters"),
+                                contents: bytemuck::cast_slice(params),
+                                usage: wgpu::BufferUsages::UNIFORM,
+                            })
+                    })
+                    .clone();
+                let mut entries: Vec<_> = buffers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| wgpu::BindGroupEntry {
+                        binding: i as u32,
+                        resource: b.as_entire_binding(),
+                    })
+                    .collect();
+                entries.push(wgpu::BindGroupEntry {
+                    binding: buffers.len() as u32,
+                    resource: uniform.as_entire_binding(),
+                });
+                let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Pplx Flash dispatch"),
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &entries,
+                });
+                self.cached_bindings.borrow_mut().insert(key, bindings.clone());
+                bindings
+            }
+        };
         if self.batch_passes.get() {
             ensure!(
                 self.profile.is_none(),
@@ -320,9 +332,6 @@ impl Device {
         };
         staging.unmap();
         staging.destroy();
-        for uniform in self.uniforms.borrow_mut().drain(..) {
-            uniform.destroy();
-        }
         Ok(values)
     }
 }

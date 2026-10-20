@@ -1,5 +1,17 @@
 use super::*;
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = performance, js_name = now)]
+    fn now_ms() -> f64;
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn now_ms() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1e3
+}
+
 impl Gpu {
     pub(super) async fn install_pipeline(
         &mut self,
@@ -36,6 +48,13 @@ impl Gpu {
     pub(crate) async fn checkpoint(mode: &str, profile: bool) -> Result<Self> {
         let reuse = mode.ends_with("-reuse");
         let mode = mode.strip_suffix("-reuse").unwrap_or(mode);
+        let (mode, forced_scan) = if let Some(mode) = mode.strip_suffix("-scan-chained") {
+            (mode, Some("delta_scan_chained"))
+        } else if let Some(mode) = mode.strip_suffix("-scan-baseline") {
+            (mode, Some("delta_scan"))
+        } else {
+            (mode, None)
+        };
         let requested_wide = mode == "q4-e4";
         let grouped_float = requested_wide || mode == "q4-e4-baseline";
         let mode = if ["q4-e4-int8", "q4-e4-baseline"].contains(&mode) { "q4-e4" } else { mode };
@@ -152,7 +171,109 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             gpu.install_pipeline("q4_weight", q4::quantize()).await?;
             gpu.install_pipeline("q4_expand", q4::expand()).await?;
         }
+        if gpu.grouped_q4() {
+            gpu.install_pipeline("delta_scan_chained", shaders::source(shaders::DELTA_SCAN_CHAINED))
+                .await?;
+            gpu.select_delta_scan(forced_scan).await?;
+            // Both match the tuned projection kernel bit for bit, so they require that kernel.
+            if wide {
+                gpu.install_pipeline("int8_gemm_narrow", include_str!("grouped_q4_narrow.wgsl").into())
+                    .await?;
+                if gpu.device.device.limits().max_compute_workgroup_storage_size >= 29696 {
+                    gpu.install_pipeline("q4_mlp", include_str!("grouped_q4_mlp.wgsl").into())
+                        .await?;
+                }
+            }
+            gpu.select_norm().await?;
+            // Per-dispatch timestamps need their own passes.
+            gpu.device.batch_passes.set(!profile);
+        }
         Ok(gpu)
+    }
+
+    // The chained scan keeps the baseline's summation order, so it must match bit for bit; it
+    // is kept only when this device's compiler preserves that and it is measurably faster.
+    async fn select_delta_scan(&mut self, forced: Option<&'static str>) -> Result<()> {
+        const ROWS: usize = 128;
+        const CANDIDATES: [&str; 2] = ["delta_scan", "delta_scan_chained"];
+        // Unit-scale q/k/v and decays below one, like delta_qk and delta_params outputs.
+        let qk: Vec<f32> = (0..ROWS * 8192)
+            .map(|i| ((i * 7919 % 2003) as f32 / 1001.5 - 1.) * 0.09)
+            .collect();
+        let gates: Vec<f32> = (0..ROWS * 64)
+            .map(|i| if i % 2 == 0 { 0.9 + (i / 2 % 7) as f32 * 0.01 } else { 0.5 })
+            .collect();
+        let qk = self.device.buffer(&qk, "scan selection inputs")?;
+        let gates = self.device.buffer(&gates, "scan selection gates")?;
+        let outputs = [
+            self.device.empty(ROWS * 4096, "scan selection output")?,
+            self.device.empty(ROWS * 4096, "scan selection output")?,
+        ];
+        let mut best = [f64::INFINITY; 2];
+        for round in 0..4 {
+            for (i, name) in CANDIDATES.iter().enumerate() {
+                let mut encoder = self.device.encoder();
+                for _ in 0..4 {
+                    self.run(&mut encoder, name, [&qk, &gates, &self.dummy, &outputs[i]], &[ROWS], 4096)?;
+                }
+                let start = now_ms();
+                self.device.submit_deferred(encoder).wait().await?;
+                // The first round compiles and warms up both kernels.
+                if round > 0 {
+                    best[i] = best[i].min(now_ms() - start);
+                }
+            }
+        }
+        let baseline = self.device.read(self.device.encoder(), &outputs[0], ROWS * 4096).await?;
+        let chained = self.device.read(self.device.encoder(), &outputs[1], ROWS * 4096).await?;
+        let difference = baseline.iter().zip(&chained).fold(0f32, |a, (x, y)| a.max((x - y).abs()));
+        let agrees = baseline.iter().zip(&chained).all(|(x, y)| x.to_bits() == y.to_bits());
+        self.delta_scan = match forced {
+            Some(name) => name,
+            None if agrees && best[1] < best[0] * 0.97 => CANDIDATES[1],
+            None => CANDIDATES[0],
+        };
+        self.delta_scan_selection = serde_json::json!({"forced":forced.is_some(),"rows":ROWS,
+            "baseline_ms":best[0],"chained_ms":best[1],"max_abs_difference":difference,"agrees":agrees});
+        for buffer in [qk, gates].into_iter().chain(outputs) {
+            buffer.destroy();
+        }
+        self.device.discard_pending();
+        ensure!(agrees || forced.is_none(), "chained delta scan disagrees with the baseline");
+        Ok(())
+    }
+
+    // The cooperative norm keeps NORM's summation order; use it only where this device's
+    // compiler reproduces NORM bit for bit.
+    async fn select_norm(&mut self) -> Result<()> {
+        const ROWS: usize = 64;
+        self.install_pipeline("norm_cooperative", shaders::source(shaders::NORM_COOPERATIVE)).await?;
+        let x: Vec<f32> = (0..ROWS * D).map(|i| ((i * 7919 % 2003) as f32 - 1001.) / 97.).collect();
+        let w: Vec<u8> = (0..D)
+            .flat_map(|i| ((((i * 13 % 97) as f32 - 48.) / 50.).to_bits() >> 16).to_le_bytes()[..2].to_vec())
+            .collect();
+        let x = self.device.buffer(&x, "norm selection input")?;
+        let w = self.device.bytes(&w, "norm selection weights")?;
+        let outputs = [
+            self.device.empty(ROWS * D, "norm selection output")?,
+            self.device.empty(ROWS * D, "norm selection output")?,
+        ];
+        let mut encoder = self.device.encoder();
+        for (name, y) in ["norm", "norm_cooperative"].into_iter().zip(&outputs) {
+            self.run(&mut encoder, name, [&x, &w, &self.dummy, y], &[ROWS, D], ROWS)?;
+        }
+        let serial = self.device.read_words(encoder, &outputs[0], ROWS * D).await?;
+        let cooperative = self.device.read_words(self.device.encoder(), &outputs[1], ROWS * D).await?;
+        let cooperative_pipeline = self.pipelines.remove("norm_cooperative").context("cooperative norm")?;
+        if serial == cooperative {
+            self.pipelines.insert("norm", cooperative_pipeline);
+            self.cooperative_norm = true;
+        }
+        for buffer in [x, w].into_iter().chain(outputs) {
+            buffer.destroy();
+        }
+        self.device.discard_pending();
+        Ok(())
     }
 
     pub(super) fn checkpoint_fp16(&self, input: &Buffer, bytes: usize) -> Result<Buffer> {

@@ -79,6 +79,8 @@ impl BrowserGpu {
             "q4-e4-signed" => ("q4-e4-signed-reuse", 0),
             "q4-e4-baseline" => ("q4-e4-baseline-reuse", 0),
             "q4-e4-int8" => ("q4-e4-int8-reuse", 0),
+            "q4-e4-scan-chained" => ("q4-e4-scan-chained-reuse", 0),
+            "q4-e4-scan-baseline" => ("q4-e4-scan-baseline-reuse", 0),
             _ => (mode, 0),
         };
         let gpu = webgpu::Gpu::checkpoint(decoder_mode, profile)

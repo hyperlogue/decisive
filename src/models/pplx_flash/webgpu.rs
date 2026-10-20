@@ -59,6 +59,8 @@ pub(super) struct Gpu {
     scratch_pool: RefCell<Vec<Buffer>>,
     allocation_count: Cell<usize>,
     dispatch_count: Cell<usize>,
+    delta_scan: &'static str,
+    delta_scan_selection: serde_json::Value,
     #[cfg(feature = "kernel-checks")]
     int8: Option<int8::State>,
     #[cfg(feature = "kernel-checks")]
@@ -195,6 +197,8 @@ impl Gpu {
             scratch_pool: RefCell::new(Vec::new()),
             allocation_count: Cell::new(0),
             dispatch_count: Cell::new(0),
+            delta_scan: "delta_scan",
+            delta_scan_selection: serde_json::Value::Null,
             #[cfg(feature = "kernel-checks")]
             int8: None,
             #[cfg(feature = "kernel-checks")]
@@ -238,6 +242,8 @@ impl Gpu {
             "gemm_tile":self.gemm_tile,"packed_projection_inputs":self.packed_inputs,
             "fused_mlp_tile":self.mlp_tile,"small_row_tile":self.small_tile,
             "tiled_attention":self.tiled_attention,"cooperative_norm":self.cooperative_norm,"batched_compute_passes":self.device.batch_passes.get(),
+            "cached_bindings":true,"fused_mlp_quantization":self.pipelines.contains_key("q4_mlp"),
+            "delta_scan":self.delta_scan,"delta_scan_selection":self.delta_scan_selection,
             "timing":"wall-clock, synchronized per layer; not GPU timestamps"})
     }
     pub fn discard_scratch(&self) {
@@ -389,9 +395,14 @@ impl Gpu {
                 params[0].div_ceil(int8_tile[0]),
                 1,
             ]
-        } else if name == "int8_mlp" {
+        } else if name == "int8_gemm_narrow" {
+            [params[1].div_ceil(32), params[0].div_ceil(32), 1]
+        } else if name == "int8_mlp" || name == "q4_mlp" {
             [params[1].div_ceil(64), params[0].div_ceil(64), 1]
-        } else if self.cooperative_norm && name == "norm" {
+        } else if name == "delta_scan_chained" {
+            // 32 state columns per workgroup: 32 heads * 128 columns / 32.
+            [128, 1, 1]
+        } else if (self.cooperative_norm && name == "norm") || name == "norm_cooperative" {
             [params[0], 1, 1]
         } else if self.tiled_attention && name == "scores" {
             [params[0].div_ceil(16), params[1].div_ceil(16), 16]
@@ -436,7 +447,9 @@ impl Gpu {
         #[cfg(feature = "kernel-checks")]
         if self.grouped_q4() {
             let input_buffer = self.int8_input(e, x, n, input)?;
-            self.run(e, "int8_gemm", [&input_buffer, w, &self.dummy, &y], &[n, output, input], 0)?;
+            // The 64x64 tile leaves the 32-wide recurrent projections few workgroups.
+            let name = if output <= 32 && self.pipelines.contains_key("int8_gemm_narrow") { "int8_gemm_narrow" } else { "int8_gemm" };
+            self.run(e, name, [&input_buffer, w, &self.dummy, &y], &[n, output, input], 0)?;
             return Ok(y);
         }
         #[cfg(feature = "kernel-checks")]
@@ -766,7 +779,7 @@ impl Gpu {
             let context = self.empty(n * 4096)?;
             self.run(
                 &mut e,
-                "delta_scan",
+                self.delta_scan,
                 [&qk, &gates, &self.dummy, &heads],
                 &[n],
                 4096,
@@ -817,8 +830,29 @@ impl Gpu {
         let mut quantized_activated = None;
         #[cfg(not(feature = "kernel-checks"))]
         let quantized_activated: Option<Buffer> = None;
+        // Gate, up, SiLU product and down_proj activation quantization in one kernel.
+        #[allow(unused_mut)]
+        let mut quantized_down: Option<Buffer> = None;
         #[cfg(feature = "kernel-checks")]
-        if let Some(state) = int8_mlp.filter(|state| state.fused) {
+        if int8_mlp.is_some() && self.grouped_q4() && self.pipelines.contains_key("q4_mlp") {
+            let input = self.int8_input(&mut e, &norm, nq, D)?;
+            let output = self.empty(nq * (9216 / 64) * 17)?;
+            self.run(
+                &mut e,
+                "q4_mlp",
+                [
+                    &input,
+                    get("mlp.gate_proj.weight", &[9216, D])?,
+                    get("mlp.up_proj.weight", &[9216, D])?,
+                    &output,
+                ],
+                &[nq, 9216, D],
+                0,
+            )?;
+            quantized_down = Some(output);
+        }
+        #[cfg(feature = "kernel-checks")]
+        if let Some(state) = int8_mlp.filter(|state| state.fused && quantized_down.is_none()) {
             let gate = state
                 .weight(get("mlp.gate_proj.weight", &[9216, D])?)
                 .context("missing INT8 gate")?;
@@ -838,6 +872,8 @@ impl Gpu {
         }
         let activated = if let Some(output) = quantized_activated {
             output
+        } else if let Some(input) = &quantized_down {
+            input.clone()
         } else if self.mlp_tile.is_some() && int8_mlp.is_none() {
             let output = self.empty(nq * 9216)?;
             self.run(
@@ -872,14 +908,26 @@ impl Gpu {
             )?;
             self.point(&mut e, &gate, &up, nq * 9216, 1)?
         };
-        let down = self.linear(
-            &mut e,
-            &activated,
-            get("mlp.down_proj.weight", &[D, 9216])?,
-            nq,
-            9216,
-            D,
-        )?;
+        let down = if quantized_down.is_some() {
+            let y = self.empty(nq * D)?;
+            self.run(
+                &mut e,
+                "int8_gemm",
+                [&activated, get("mlp.down_proj.weight", &[D, 9216])?, &self.dummy, &y],
+                &[nq, D, 9216],
+                0,
+            )?;
+            y
+        } else {
+            self.linear(
+                &mut e,
+                &activated,
+                get("mlp.down_proj.weight", &[D, 9216])?,
+                nq,
+                9216,
+                D,
+            )?
+        };
         let output = self.point(&mut e, &residual, &down, nq * D, 0)?;
         Ok((e, output, nq))
     }

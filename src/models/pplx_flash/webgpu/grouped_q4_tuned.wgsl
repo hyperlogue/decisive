@@ -44,20 +44,20 @@ let b0=vec4<f32>(bt[j*64u+l.x+0u]);
 let b1=vec4<f32>(bt[j*64u+l.x+16u]);
 let b2=vec4<f32>(bt[j*64u+l.x+32u]);
 let b3=vec4<f32>(bt[j*64u+l.x+48u]);
-let a0=vec4<f32>(at[(l.y*4u+0u)*16u+j]);dot0+=vec4<f32>(dot(a0,b0),dot(a0,b1),dot(a0,b2),dot(a0,b3));
-let a1=vec4<f32>(at[(l.y*4u+1u)*16u+j]);dot1+=vec4<f32>(dot(a1,b0),dot(a1,b1),dot(a1,b2),dot(a1,b3));
-let a2=vec4<f32>(at[(l.y*4u+2u)*16u+j]);dot2+=vec4<f32>(dot(a2,b0),dot(a2,b1),dot(a2,b2),dot(a2,b3));
-let a3=vec4<f32>(at[(l.y*4u+3u)*16u+j]);dot3+=vec4<f32>(dot(a3,b0),dot(a3,b1),dot(a3,b2),dot(a3,b3));
+let a0=vec4<f32>(at[(l.y*4u+0u)*16u+j]);dot0=fma(vec4<f32>(a0.w),vec4<f32>(b0.w,b1.w,b2.w,b3.w),fma(vec4<f32>(a0.z),vec4<f32>(b0.z,b1.z,b2.z,b3.z),fma(vec4<f32>(a0.y),vec4<f32>(b0.y,b1.y,b2.y,b3.y),fma(vec4<f32>(a0.x),vec4<f32>(b0.x,b1.x,b2.x,b3.x),dot0))));
+let a1=vec4<f32>(at[(l.y*4u+1u)*16u+j]);dot1=fma(vec4<f32>(a1.w),vec4<f32>(b0.w,b1.w,b2.w,b3.w),fma(vec4<f32>(a1.z),vec4<f32>(b0.z,b1.z,b2.z,b3.z),fma(vec4<f32>(a1.y),vec4<f32>(b0.y,b1.y,b2.y,b3.y),fma(vec4<f32>(a1.x),vec4<f32>(b0.x,b1.x,b2.x,b3.x),dot1))));
+let a2=vec4<f32>(at[(l.y*4u+2u)*16u+j]);dot2=fma(vec4<f32>(a2.w),vec4<f32>(b0.w,b1.w,b2.w,b3.w),fma(vec4<f32>(a2.z),vec4<f32>(b0.z,b1.z,b2.z,b3.z),fma(vec4<f32>(a2.y),vec4<f32>(b0.y,b1.y,b2.y,b3.y),fma(vec4<f32>(a2.x),vec4<f32>(b0.x,b1.x,b2.x,b3.x),dot2))));
+let a3=vec4<f32>(at[(l.y*4u+3u)*16u+j]);dot3=fma(vec4<f32>(a3.w),vec4<f32>(b0.w,b1.w,b2.w,b3.w),fma(vec4<f32>(a3.z),vec4<f32>(b0.z,b1.z,b2.z,b3.z),fma(vec4<f32>(a3.y),vec4<f32>(b0.y,b1.y,b2.y,b3.y),fma(vec4<f32>(a3.x),vec4<f32>(b0.x,b1.x,b2.x,b3.x),dot3))));
 }
 {let j=base+1u;
 let b0=vec4<f32>(bt[j*64u+l.x+0u]);
 let b1=vec4<f32>(bt[j*64u+l.x+16u]);
 let b2=vec4<f32>(bt[j*64u+l.x+32u]);
 let b3=vec4<f32>(bt[j*64u+l.x+48u]);
-let a0=vec4<f32>(at[(l.y*4u+0u)*16u+j]);dot0+=vec4<f32>(dot(a0,b0),dot(a0,b1),dot(a0,b2),dot(a0,b3));
-let a1=vec4<f32>(at[(l.y*4u+1u)*16u+j]);dot1+=vec4<f32>(dot(a1,b0),dot(a1,b1),dot(a1,b2),dot(a1,b3));
-let a2=vec4<f32>(at[(l.y*4u+2u)*16u+j]);dot2+=vec4<f32>(dot(a2,b0),dot(a2,b1),dot(a2,b2),dot(a2,b3));
-let a3=vec4<f32>(at[(l.y*4u+3u)*16u+j]);dot3+=vec4<f32>(dot(a3,b0),dot(a3,b1),dot(a3,b2),dot(a3,b3));
+let a0=vec4<f32>(at[(l.y*4u+0u)*16u+j]);dot0=fma(vec4<f32>(a0.w),vec4<f32>(b0.w,b1.w,b2.w,b3.w),fma(vec4<f32>(a0.z),vec4<f32>(b0.z,b1.z,b2.z,b3.z),fma(vec4<f32>(a0.y),vec4<f32>(b0.y,b1.y,b2.y,b3.y),fma(vec4<f32>(a0.x),vec4<f32>(b0.x,b1.x,b2.x,b3.x),dot0))));
+let a1=vec4<f32>(at[(l.y*4u+1u)*16u+j]);dot1=fma(vec4<f32>(a1.w),vec4<f32>(b0.w,b1.w,b2.w,b3.w),fma(vec4<f32>(a1.z),vec4<f32>(b0.z,b1.z,b2.z,b3.z),fma(vec4<f32>(a1.y),vec4<f32>(b0.y,b1.y,b2.y,b3.y),fma(vec4<f32>(a1.x),vec4<f32>(b0.x,b1.x,b2.x,b3.x),dot1))));
+let a2=vec4<f32>(at[(l.y*4u+2u)*16u+j]);dot2=fma(vec4<f32>(a2.w),vec4<f32>(b0.w,b1.w,b2.w,b3.w),fma(vec4<f32>(a2.z),vec4<f32>(b0.z,b1.z,b2.z,b3.z),fma(vec4<f32>(a2.y),vec4<f32>(b0.y,b1.y,b2.y,b3.y),fma(vec4<f32>(a2.x),vec4<f32>(b0.x,b1.x,b2.x,b3.x),dot2))));
+let a3=vec4<f32>(at[(l.y*4u+3u)*16u+j]);dot3=fma(vec4<f32>(a3.w),vec4<f32>(b0.w,b1.w,b2.w,b3.w),fma(vec4<f32>(a3.z),vec4<f32>(b0.z,b1.z,b2.z,b3.z),fma(vec4<f32>(a3.y),vec4<f32>(b0.y,b1.y,b2.y,b3.y),fma(vec4<f32>(a3.x),vec4<f32>(b0.x,b1.x,b2.x,b3.x),dot3))));
 }
 }
 let scales=vec4<f32>(sb[l.x+0u],sb[l.x+16u],sb[l.x+32u],sb[l.x+48u]);

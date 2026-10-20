@@ -240,5 +240,76 @@ pub(crate) async fn check() -> Result<serde_json::Value> {
             gpu.discard_scratch();
         }
     }
+    checks.push(fused_mlp_check().await?);
+    checks.push(norm_check().await?);
     Ok(serde_json::json!({"passed":true,"scheme":"q4-w4a8-e4-r4-g64","checks":checks}))
+}
+
+// The fused gate/up/SiLU/quantize kernel must emit exactly the down_proj input of the
+// unfused path: two projections, the SiLU product, then activation quantization.
+async fn fused_mlp_check() -> Result<serde_json::Value> {
+    let gpu = Gpu::checkpoint("q4-e4", false).await?;
+    ensure!(gpu.pipelines.contains_key("q4_mlp"), "fused MLP kernel unavailable on this device");
+    let (m, n, k) = (67, 192, 256);
+    let weight = |seed: usize| -> Result<Buffer> {
+        let raw: Vec<u8> = (0..n * k)
+            .flat_map(|i| {
+                let v = ((i * seed % 251) as f32 - 125.) / 400.;
+                ((v.to_bits() >> 16) as u16).to_le_bytes()
+            })
+            .collect();
+        gpu.device.bytes(&crate::pplx_flash::packed_q4::pack(&raw, n, k)?, "MLP check weights")
+    };
+    let (gate, up) = (weight(37)?, weight(53)?);
+    let x: Vec<f32> = (0..m * k).map(|i| ((i * 29 % 509) as f32 - 254.) / 97.).collect();
+    let x = gpu.device.buffer(&x, "MLP check input")?;
+    let mut e = gpu.device.encoder();
+    let input = gpu.int8_input(&mut e, &x, m, k)?;
+    let g = gpu.empty(m * n)?;
+    let u = gpu.empty(m * n)?;
+    gpu.run(&mut e, "int8_gemm", [&input, &gate, &gpu.dummy, &g], &[m, n, k], 0)?;
+    gpu.run(&mut e, "int8_gemm", [&input, &up, &gpu.dummy, &u], &[m, n, k], 0)?;
+    let activated = gpu.point(&mut e, &g, &u, m * n, 1)?;
+    let expected = gpu.quantize_int8(&mut e, &activated, m, n, false)?;
+    let fused = gpu.empty(m * (n / 64) * 17)?;
+    gpu.run(&mut e, "q4_mlp", [&input, &gate, &up, &fused], &[m, n, k], 0)?;
+    let words = m * (n / 64) * 17;
+    let expected = gpu.device.read_words(e, &expected, words).await?;
+    let fused = gpu.device.read_words(gpu.device.encoder(), &fused, words).await?;
+    let mismatches = expected.iter().zip(&fused).filter(|(a, b)| a != b).count();
+    ensure!(mismatches == 0, "fused MLP differs from the unfused path in {mismatches} words");
+    for buffer in [gate, up, x] {
+        buffer.destroy();
+    }
+    gpu.discard_scratch();
+    Ok(serde_json::json!({"mode":"q4-e4-fused-mlp","rows":m,"outputs":n,"input":k,"exact_words":words}))
+}
+
+// The cooperative norm keeps NORM's summation order, so it must match NORM bit for bit,
+// including rows that end inside a tile.
+async fn norm_check() -> Result<serde_json::Value> {
+    let mut gpu = Gpu::checkpoint("q4-e4", false).await?;
+    ensure!(gpu.cooperative_norm, "cooperative norm rejected by its startup comparison");
+    gpu.install_pipeline("norm_serial", shaders::source(shaders::NORM)).await?;
+    let mut cases = Vec::new();
+    for (rows, d) in [(37, 2560), (5, 1028)] {
+        let x: Vec<f32> = (0..rows * d).map(|i| ((i * 31 % 1009) as f32 - 504.) / 71.).collect();
+        let w: Vec<u8> = (0..d)
+            .flat_map(|i| ((((i * 13 % 97) as f32 - 48.) / 50.).to_bits() >> 16).to_le_bytes()[..2].to_vec())
+            .collect();
+        let x = gpu.device.buffer(&x, "norm check input")?;
+        let w = gpu.device.bytes(&w, "norm check weights")?;
+        let (cooperative, serial) = (gpu.empty(rows * d)?, gpu.empty(rows * d)?);
+        let mut e = gpu.device.encoder();
+        gpu.run(&mut e, "norm", [&x, &w, &gpu.dummy, &cooperative], &[rows, d], rows)?;
+        gpu.run(&mut e, "norm_serial", [&x, &w, &gpu.dummy, &serial], &[rows, d], rows)?;
+        let serial = gpu.device.read_words(e, &serial, rows * d).await?;
+        let cooperative = gpu.device.read_words(gpu.device.encoder(), &cooperative, rows * d).await?;
+        ensure!(serial == cooperative, "cooperative norm differs from NORM: {rows}x{d}");
+        cases.push([rows, d]);
+        x.destroy();
+        w.destroy();
+        gpu.discard_scratch();
+    }
+    Ok(serde_json::json!({"mode":"q4-e4-cooperative-norm","cases":cases,"exact":true}))
 }
