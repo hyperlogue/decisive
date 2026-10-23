@@ -9,11 +9,8 @@ use shaders::{Accumulate, Epilogue, SLICE};
 use std::{collections::VecDeque, sync::Arc};
 
 const FF: usize = 1536;
-// Questions are batched into groups: their states share one encoder pass and the
-// cross-attention memory, and their pooled vectors are read back together.
 const STATE_ROWS: usize = 1024;
 const READOUT_ROWS: usize = 2048;
-// Choice rows scored together; a chunk's uncached choices are encoded alongside the states.
 const CHUNK_ROWS: usize = 512;
 const ENCODER_ROWS: usize = STATE_ROWS + CHUNK_ROWS;
 const MAX_CHOICES: usize = 255;
@@ -27,7 +24,6 @@ const SPLIT_ROWS: usize = 192;
 // Queries per encoder attention tile.
 const ENCODER_QUERIES: usize = 16;
 
-// Weights are stored transposed, [input × output], so GEMM tiles load along the output.
 struct Linear {
     input: usize,
     output: usize,
@@ -60,10 +56,7 @@ struct ScorerLayer {
 }
 struct Kernels {
     embed: Kernel,
-    // GEMM_TILES × [bias, gelu, residual]
     gemm: [[Kernel; 3]; 3],
-    // Residual GEMMs over k > SLICE: sliced one-pass for the medium and large tiles, split-K
-    // partials for the small and medium tiles, and the ordered reduce of the partials.
     sliced: [Kernel; 2],
     split: [Kernel; 2],
     reduce: Kernel,
@@ -77,15 +70,12 @@ pub struct Model {
     device: Device,
     config: super::Config,
     input: input::Input,
-    // Word embeddings in VOCABULARY_SPLIT-row buffers, then the type row, embedding norm weight
-    // and bias, and position rows.
     vocabulary: [wgpu::Buffer; 4],
     prelude: wgpu::Buffer,
     embedding_eps: f32,
     readout: readout::Readout,
     encoder: Vec<EncoderLayer>,
     scorer: Vec<ScorerLayer>,
-    // Cross-attention keys and values of every scorer layer, side by side.
     memory: Linear,
     out_norm: Norm,
     kernels: Kernels,
@@ -99,8 +89,6 @@ struct Entry {
     rows: Vec<u32>,
     request: u64,
 }
-// Each Session owns its GPU scratch, parameter ring and choice cache. Cached choice encodings
-// live as rows of one buffer, so batches gather them by index.
 pub struct Session {
     identity: Option<Arc<()>>,
     arena: Option<Arena>,
@@ -180,7 +168,6 @@ impl Arena {
                 device.storage(CHUNK_ROWS * D, "Decima scorer stream")?,
             ],
             normed: device.storage(CHUNK_ROWS * D, "Decima scorer norm")?,
-            // Rows past cache_rows hold this chunk's choices that do not fit the cache.
             cache: device.storage((cache_rows + CHUNK_ROWS) * D, "Decima choice cache")?,
             cache_rows,
             tables: device.storage(table_capacity, "Decima tables")?,
@@ -196,15 +183,12 @@ impl Arena {
     }
 }
 
-// Questions whose states are encoded together. The first chunk encodes every state; each
-// chunk encodes its uncached choices and then scores its choices.
 struct Group {
     questions: Vec<Placed>,
     chunks: Vec<Chunk>,
     state_rows: usize,
     readout_rows: usize,
 }
-// Where a question's state sits in the encoder batch and its pooled vectors in the readout.
 struct Placed {
     state: usize,
     tokens: usize,
@@ -213,11 +197,8 @@ struct Placed {
 }
 #[derive(Default)]
 struct Chunk {
-    // (first encoder row, token ids) of each sequence in the encoder batch
     encode: Vec<(usize, Vec<u32>)>,
-    // (encoder row, cache row) for newly cached or overflow choices
     scatter: Vec<[u32; 2]>,
-    // (question, readout row of the choice's encoder mean, cache rows)
     choices: Vec<(usize, usize, Vec<u32>)>,
 }
 
@@ -233,7 +214,6 @@ impl Model {
         model.write_vocabulary(0, bytemuck::cast_slice(&vocabulary))?;
         Ok(model)
     }
-    // Builds the model with zeroed word embeddings; fill them with `write_vocabulary`.
     async fn without_vocabulary(source: CpuModel) -> Result<Self> {
         ensure!(
             source.precision() == Precision::F32,
@@ -371,7 +351,6 @@ impl Model {
             identity: Arc::new(()),
         })
     }
-    // Writes word embedding rows, little-endian f32, starting at row `first`.
     fn write_vocabulary(&self, first: usize, bytes: &[u8]) -> Result<()> {
         let width = D * 4;
         ensure!(
@@ -498,7 +477,6 @@ impl Model {
             [rows as u32, 1, 1],
         )
     }
-    // `strides`: (q stride, q offset, kv stride, k offset, v offset); tiles start at `table`.
     fn attention(
         &self,
         f: &mut Frame,
@@ -558,7 +536,6 @@ impl Model {
     ) -> Result<Vec<f32>> {
         Ok(self.decide_many(&[(state, q)], session).await?.remove(0))
     }
-    // Scores several questions in as few GPU passes as capacity allows.
     pub async fn decide_many(
         &self,
         items: &[(&str, &Question)],
@@ -674,8 +651,6 @@ impl Model {
         let chunk = &g.chunks[index];
         let first = index == 0;
         let mut tables: Vec<u32> = Vec::new();
-        // Encoder batch: (token, position) per row, sequences back to back, and attention tiles
-        // that stay inside each sequence.
         let mut encoder_rows = 0;
         for (first_row, ids) in &chunk.encode {
             ensure!(
@@ -703,7 +678,6 @@ impl Model {
         }
         let scatter = tables.len();
         tables.extend(chunk.scatter.iter().flatten());
-        // Scorer batch: choices are laid out back to back in the stream.
         let gather = tables.len();
         let mut segments = Vec::new();
         let mut scorer_rows = 0;
@@ -719,7 +693,6 @@ impl Model {
             tiles(&mut tables, self.queries, start, count, start, count);
         }
         let self_tile_count = (tables.len() - self_tiles) / 4;
-        // Cross attention: each question's choices attend to that question's state.
         let cross_tiles = tables.len();
         for run in segments.chunk_by(|a, b| a.2 == b.2) {
             let (start, question) = (run[0].0, &g.questions[run[0].2]);
@@ -902,8 +875,6 @@ impl Model {
     }
 }
 
-// Tiles of up to `size` queries over [first, first + count), each attending
-// [keys, keys + key_count).
 fn tiles(t: &mut Vec<u32>, size: usize, first: usize, count: usize, keys: usize, key_count: usize) {
     for q in (0..count).step_by(size) {
         t.extend([
@@ -915,8 +886,6 @@ fn tiles(t: &mut Vec<u32>, size: usize, first: usize, count: usize, keys: usize,
     }
 }
 
-// Groups questions by state and readout capacity, assigns cache rows (evicting older entries
-// not used by this request) and splits each group's choices into chunks of CHUNK_ROWS rows.
 fn plan(session: &mut Session, items: Vec<(Vec<u32>, Vec<Vec<u32>>)>) -> Vec<Group> {
     session.request += 1;
     let request = session.request;
@@ -1009,7 +978,6 @@ fn plan(session: &mut Session, items: Vec<(Vec<u32>, Vec<Vec<u32>>)>) -> Vec<Gro
 }
 
 impl Linear {
-    // Concatenates the outputs of `parts` and transposes them to [input × output].
     fn upload(device: &Device, parts: Vec<cpu::Linear>) -> Result<Self> {
         let parts = parts
             .into_iter()
@@ -1065,93 +1033,26 @@ impl Model {
             }
             return Ok(Value::Array(out));
         }
-        ensure!(request.is_object(), "request must be an object");
-        ensure!(
-            request["long"].is_null(),
-            "Decima long-document chunking is not implemented; maximum state + question is 512 tokens"
-        );
-        let state = &request["state"];
-        ensure!(
-            state.is_string() || state.is_array() || state.is_object(),
-            "state must be a string, object or array"
-        );
-        let state = input::text(state);
-        let lang = request.get("lang").map_or(Ok("en"), |v| {
-            v.as_str()
-                .ok_or_else(|| anyhow::anyhow!("lang must be a string"))
-        })?;
-        let questions = request["questions"]
-            .as_object()
-            .ok_or_else(|| anyhow::anyhow!("questions must be an object"))?;
-        ensure!((1..=256).contains(&questions.len()), "need 1–256 questions");
-        let threshold = request
-            .get("min_confidence")
-            .filter(|v| !v.is_null())
-            .map(|v| {
-                v.as_f64()
-                    .ok_or_else(|| anyhow::anyhow!("min_confidence must be numeric"))
-            })
-            .transpose()?;
-        ensure!(
-            threshold.is_none_or(|v| (0.0..=1.0).contains(&v)),
-            "min_confidence must be in [0,1]"
-        );
-        let mut answers = serde_json::Map::new();
-        let parsed = questions
-            .iter()
-            .map(|(id, spec)| Ok((id, input::parse_question(id, spec, lang)?)))
-            .collect::<Result<Vec<_>>>()?;
-        let r = |v: f64| (v * 10000.).round_ties_even() / 10000.;
+        let parsed = super::long::parse(&self.input, request)?;
         let batch: Vec<_> = parsed
+            .states
             .iter()
-            .map(|(_, (q, _))| (state.as_str(), q))
+            .flat_map(|state| {
+                parsed
+                    .questions
+                    .iter()
+                    .map(move |(_, q, _)| (state.as_str(), q))
+            })
             .collect();
         let scores = self.decide_many(&batch, s).await?;
-        for ((id, (q, keys)), p) in parsed.into_iter().zip(scores) {
-            let best = p
-                .iter()
-                .enumerate()
-                .max_by(|(i, a), (j, b)| a.total_cmp(b).then_with(|| j.cmp(i)))
-                .unwrap()
-                .0;
-            let confidence =
-                ((p.len() as f64 * p[best] as f64 - 1.) / (p.len() - 1) as f64).clamp(0., 1.);
-            let probabilities: serde_json::Map<String, Value> = p
-                .iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    (
-                        if q.kind == Kind::Choice {
-                            keys[i].clone()
-                        } else {
-                            i.to_string()
-                        },
-                        json!(r(*v as f64)),
-                    )
-                })
-                .collect();
-            let mut answer = match q.kind {
-                Kind::Choice => {
-                    json!({"type":"choice","choice":keys[best],"confidence":r(confidence),"probabilities":probabilities})
-                }
-                Kind::Score => {
-                    json!({"type":"score","score":r(p.iter().enumerate().map(|(i,v)|i as f64* *v as f64).sum()),"confidence":r(confidence),"legend":keys.iter().enumerate().map(|(i,v)|(i.to_string(),json!(v))).collect::<serde_json::Map<_,_>>(),"probabilities":probabilities})
-                }
-                _ => json!({"type":"noul","noul":r(p[0] as f64)}),
-            };
-            if let Some(t) = threshold {
-                answer["abstain"] = json!(confidence < t);
-            }
-            answers.insert(id.clone(), answer);
-        }
-        Ok(
-            json!({"model":"decima-small","answers":answers,"usage":{"input_tokens":self.input.ids(&state)?.len(),"output_tokens":0}}),
-        )
+        let scores: Vec<Vec<Vec<f32>>> = scores
+            .chunks(parsed.questions.len())
+            .map(<[_]>::to_vec)
+            .collect();
+        Ok(super::long::respond(&parsed, &scores))
     }
 }
 
-// Splits the word embeddings out of an encoder safetensors header: returns the header of the
-// checkpoint without them, offsets closed over the gap, and their byte range in the data.
 #[cfg(feature = "wasm")]
 fn without_vocabulary(header: &[u8]) -> Result<(Vec<u8>, std::ops::Range<usize>)> {
     let mut tensors: serde_json::Map<String, Value> = serde_json::from_slice(header)?;
@@ -1239,7 +1140,6 @@ mod browser {
                 }
             }
         }
-        // The checkpoint without its word embeddings, and their absolute byte range.
         async fn without_vocabulary(&self) -> Result<(Vec<u8>, std::ops::Range<usize>)> {
             let size = u64::from_le_bytes(self.read(0, 8).await?.try_into().unwrap()) as usize;
             ensure!(size < 1 << 24, "invalid encoder checkpoint header");
@@ -1260,8 +1160,6 @@ mod browser {
     }
     #[wasm_bindgen(js_class=DecimaWebGpuModel)]
     impl BrowserModel {
-        // `encoder_weights` may be a Blob, Uint8Array or ArrayBuffer. It is read in ranges, and
-        // the word embeddings go straight to the GPU, so the checkpoint never sits in wasm memory.
         pub async fn create(
             config: Vec<u8>,
             encoder_config: Vec<u8>,

@@ -405,7 +405,6 @@ pub(super) fn softmax(x: &mut [f32]) {
         *v /= sum;
     }
 }
-// Jobs write disjoint columns and join before Linear::apply releases the output borrow.
 #[cfg(all(feature = "cpu", target_arch = "x86_64"))]
 struct Columns(*mut f32);
 #[cfg(all(feature = "cpu", target_arch = "x86_64"))]

@@ -20,7 +20,6 @@ async function check(api,mode,queued){
   };
   let inFlightChecks=0,activeBankChecks=0,running=null;
   try{
-    // Reset/reuse across complete requests as well as all 32 layer swaps.
     const runs=[];
     for(let round=0;round<2;round++){
       probe.begin();

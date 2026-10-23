@@ -2,7 +2,7 @@ use super::int8::{GROUP, group_scale_bits, pack_bits};
 use anyhow::{Result, ensure};
 use rayon::prelude::*;
 
-/// Row-addressable embeddings; only requested rows are expanded during inference.
+
 pub(super) struct Embedding {
     data: Vec<u8>,
     scales: Vec<f32>,

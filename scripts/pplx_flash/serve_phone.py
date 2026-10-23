@@ -50,8 +50,6 @@ KINDS = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json':
 
 
 def selector(labels, current):
-    # Injected into every version's page, including archived asset snapshots, so one URL reaches
-    # all builds. The weights cache in OPFS is per origin, so switching does not download again.
     options = ''.join(f'<option{" selected" if label == current else ""}>{label}</option>' for label in labels)
     return (f'<div style="position:sticky;top:0;z-index:9;padding:6px 12px;background:#222;color:#eee;font:14px system-ui">'
             f'Build <select onchange="location.href=new URL(\'../\'+this.value+\'/\',location.href)">{options}</select></div>').encode()
@@ -97,7 +95,6 @@ def serve(versions, model, packed, output, port, route_token=None):
                 deadline = time.monotonic() + 30
 
         def version(self):
-            # Routes are prefix + 'v/<label>/<asset>'; returns (label, asset) or None.
             route = urlsplit(self.path).path
             match = re.fullmatch(re.escape(prefix) + r'v/([^/]+)/(.*)', route)
             return (match[1], match[2]) if match and match[1] in tables else None
@@ -106,7 +103,6 @@ def serve(versions, model, packed, output, port, route_token=None):
             self.connection.settimeout(30)
             path = urlsplit(self.path).path
             if path in (prefix, prefix[:-1]):
-                # Relative, so it also works behind a reverse proxy that mounts this server under a path.
                 self.send_response(302)
                 self.send_header('Location', ('' if path == prefix else route_token + '/') + f'v/{labels[-1]}/')
                 self.send_header('Cache-Control', 'no-store')

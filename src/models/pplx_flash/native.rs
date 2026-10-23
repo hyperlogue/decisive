@@ -7,26 +7,26 @@ use std::{path::Path, time::Instant};
 pub enum Precision {
     #[default]
     Bf16,
-    /// Compatibility mode: large W8A8 projections, BF16 embeddings and small gates.
+
     #[cfg(feature = "int8")]
     Int8,
     #[cfg(feature = "int8")]
     Q8,
     #[cfg(feature = "int8")]
     Q4,
-    /// W4A8 with four-bit embeddings, using the original absmax quantizer.
+
     #[cfg(feature = "int8")]
     Q4E4,
-    /// Reconstruction-error optimized W4A8, with eight-bit embeddings.
+
     #[cfg(feature = "int8")]
     Q4Mse,
-    /// Reconstruction-error optimized W4A8 and four-bit embeddings.
+
     #[cfg(feature = "int8")]
     Q4E4Mse,
-    /// MSE-optimized W4A8 with a fitted NF4 codebook for embeddings.
+
     #[cfg(feature = "int8")]
     Q4E4Nf4,
-    /// Affine INT4, with a fitted offset and scale per group (five effective bits).
+
     #[cfg(feature = "int8")]
     Q4E4Affine,
     #[cfg(feature = "int8")]
@@ -169,8 +169,6 @@ impl Model {
                 )?);
                 model.engine.readout.clear();
                 model.engine.readout.shrink_to_fit();
-                // All tensors used by this mode are now resident in their final layout.
-                // Release the original mappings instead of retaining an extra BF16 model.
                 model.shards.clear();
             }
         }

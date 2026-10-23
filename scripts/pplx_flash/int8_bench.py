@@ -1,7 +1,3 @@
-"""Run paired native BF16/INT8 benchmarks and labeled XNLI quality comparisons.
-
-Inference runs in the Rust CLI. This script only prepares requests and reports.
-"""
 import argparse
 import hashlib
 import json
@@ -191,7 +187,7 @@ def summarize(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Run paired native BF16/INT8 benchmarks and labeled XNLI quality comparisons.\n\nInference runs in the Rust CLI. This script only prepares requests and reports.\n')
     parser.add_argument('action', choices=['prepare', 'run', 'summarize'])
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--binary', type=Path, default=Path('target/release/decisive'))

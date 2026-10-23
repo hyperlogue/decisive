@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Raw perf data contains local paths. Keep output outside the public source tree,
-# or in ignored benchmark-runs/. Publish only sanitized summaries and stacks.
 set -euo pipefail
 mode=${1:?usage: profile_cpu.sh stat|record NEW_OUTPUT_DIRECTORY [profile_inference arguments]}
 out=${2:?new output directory required}

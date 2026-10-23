@@ -89,7 +89,6 @@ impl Device {
             groups.iter().all(|&n| n > 0 && n <= limit),
             "GPU dispatch exceeds device limits"
         );
-        // Uniforms live until submission completes; reusing one would overwrite earlier dispatches.
         let uniform = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

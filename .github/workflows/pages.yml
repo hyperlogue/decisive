@@ -1,0 +1,149 @@
+name: Deploy website to Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - src/**
+      - Cargo.toml
+      - Cargo.lock
+      - scripts/build_decima_wasm.sh
+      - examples/pplx-flash/runtime.js
+      - examples/pplx-flash/embedding-cache.js
+      - examples/pplx-flash/read-worker.js
+      - LICENSE-MIT
+      - LICENSE-APACHE
+      - NOTICE
+      - .github/workflows/pages.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - site/**
+      - src/**
+      - Cargo.toml
+      - Cargo.lock
+      - scripts/build_decima_wasm.sh
+      - examples/pplx-flash/runtime.js
+      - examples/pplx-flash/embedding-cache.js
+      - examples/pplx-flash/read-worker.js
+      - LICENSE-MIT
+      - LICENSE-APACHE
+      - NOTICE
+      - .github/workflows/pages.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pages: read
+    env:
+      RUST_VERSION: 1.95.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+
+      - name: Configure Pages
+        if: github.event_name != 'pull_request'
+        id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix site --ignore-scripts --no-audit --no-fund
+
+      - name: Test frontend
+        run: |
+          node --test site/tests/*.test.js
+          python3 -m unittest discover -s site/tests -p "test_*.py"
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_VERSION"
+
+      - name: Read wasm-bindgen version from Cargo.lock
+        id: bindings
+        run: |
+          python3 - <<'PY'
+          import os, tomllib
+          from pathlib import Path
+          packages = tomllib.loads(Path('Cargo.lock').read_text())['package']
+          versions = [p['version'] for p in packages if p['name'] == 'wasm-bindgen']
+          if len(versions) != 1:
+              raise SystemExit('Expected exactly one wasm-bindgen version in Cargo.lock')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={versions[0]}\n')
+          PY
+
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/bin/wasm-bindgen
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: pages-${{ runner.os }}-rust${{ env.RUST_VERSION }}-wb${{ steps.bindings.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: pages-${{ runner.os }}-rust${{ env.RUST_VERSION }}-wb${{ steps.bindings.outputs.version }}-
+
+      - name: Install matching wasm-bindgen
+        env:
+          WASM_BINDGEN_VERSION: ${{ steps.bindings.outputs.version }}
+        run: |
+          if [[ "$(wasm-bindgen --version 2>/dev/null)" != "wasm-bindgen $WASM_BINDGEN_VERSION" ]]; then
+            cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked --force
+          fi
+
+      - name: Build runtime and Pages site
+        env:
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}
+        run: |
+          DECISIVE_WASM_FEATURES=decima,pplx-flash,wasm,webgpu,kernel-checks \
+            bash scripts/build_decima_wasm.sh artifacts/web/pages/pkg
+          python3 site/build.py --package artifacts/web/pages/pkg
+          python3 site/pages.py --out artifacts/pages --base "$PAGES_BASE"
+          python3 site/check_pages.py artifacts/pages --base "$PAGES_BASE"
+
+      - name: Upload artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9
+        with:
+          path: artifacts/pages
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages-publish
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346

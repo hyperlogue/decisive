@@ -1,8 +1,3 @@
-"""Serve the WebGPU opportunities page and collect posted reports.
-
-Expose it over HTTPS for phones, for example with
-`tailscale serve --bg --set-path /pplx-ops http://127.0.0.1:PORT`.
-"""
 import argparse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

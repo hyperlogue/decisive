@@ -1,15 +1,3 @@
-"""Frozen-corpus CPU precision audit and separately warmed request benchmarks.
-
-Prepare the corpus with prepare_quality.py, then run this script with action run.
-All arithmetic and inference run in the Rust CLI. Raw outputs are retained.
-
-Example (run from the repository root):
-  cargo build --locked --release --no-default-features --features cli,pplx-flash,int8
-  python3 scripts/pplx_flash/prepare_quality.py --output benchmark-runs/cpu/corpus.json
-  python3 scripts/pplx_flash/cpu_bench.py run --corpus benchmark-runs/cpu/corpus.json --output benchmark-runs/cpu
-  python3 scripts/pplx_flash/cpu_bench.py run --corpus benchmark-runs/cpu/corpus.json --output benchmark-runs/cpu --performance --rounds 5
-  python3 scripts/pplx_flash/cpu_bench.py summarize --corpus benchmark-runs/cpu/corpus.json --output benchmark-runs/cpu
-"""
 import argparse
 import hashlib
 from html import escape
@@ -114,7 +102,7 @@ def read_runs(path, cases, mode):
 
 
 def compare_mae(details, candidate, reference):
-    """Bootstrap input clusters, retaining the probability-entry weighted MAE."""
+
     clusters = {}
     for row in details:
         base = row['probabilities']['bf16']
@@ -363,7 +351,7 @@ def render(result):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Frozen-corpus CPU precision audit and separately warmed request benchmarks.\n\nPrepare the corpus with prepare_quality.py, then run this script with action run.\nAll arithmetic and inference run in the Rust CLI. Raw outputs are retained.\n\nExample (run from the repository root):\n  cargo build --locked --release --no-default-features --features cli,pplx-flash,int8\n  python3 scripts/pplx_flash/prepare_quality.py --output benchmark-runs/cpu/corpus.json\n  python3 scripts/pplx_flash/cpu_bench.py run --corpus benchmark-runs/cpu/corpus.json --output benchmark-runs/cpu\n  python3 scripts/pplx_flash/cpu_bench.py run --corpus benchmark-runs/cpu/corpus.json --output benchmark-runs/cpu --performance --rounds 5\n  python3 scripts/pplx_flash/cpu_bench.py summarize --corpus benchmark-runs/cpu/corpus.json --output benchmark-runs/cpu\n')
     parser.add_argument('action', choices=['run', 'summarize'])
     parser.add_argument('--corpus', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Raw captures contain process IDs and filesystem paths; do not publish them.
 set -euo pipefail
 out=${1:?usage: profile_http.sh NEW_OUTPUT_DIRECTORY SERVER_PID PORT INPUT_JSONL ROUNDS}
 server_pid=${2:?server pid}

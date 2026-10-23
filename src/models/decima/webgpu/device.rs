@@ -8,8 +8,6 @@ pub(super) struct Device {
     pub info: wgpu::AdapterInfo,
     pub align: usize,
 }
-// Every kernel binds `reads` read-only storage buffers, then `writes` writable ones, then one
-// uniform slot addressed by a dynamic offset into the request's parameter ring.
 pub(super) struct Kernel {
     pub pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
@@ -158,8 +156,6 @@ struct Dispatch {
     offset: u32,
     groups: [u32; 3],
 }
-// Records one request's dispatches. Parameters go to a single uniform ring written once per
-// submission, and bind groups over the persistent buffers are reused across requests.
 pub(super) struct Frame {
     params: Vec<u8>,
     dispatches: Vec<Dispatch>,
@@ -177,7 +173,6 @@ impl Bindings {
             cache: HashMap::new(),
         }
     }
-    // Grows the ring before recording; bind groups over the old ring are dropped.
     pub fn reserve(&mut self, device: &Device, slots: usize) {
         if slots <= self.slots {
             return;
@@ -272,7 +267,6 @@ impl Frame {
         bindings.cache.insert(key, group.clone());
         Ok(group)
     }
-    // Records every dispatch into one compute pass.
     pub fn encode(self, device: &Device, bindings: &Bindings, encoder: &mut wgpu::CommandEncoder) {
         if self.dispatches.is_empty() {
             return;

@@ -105,7 +105,6 @@ impl Matrix {
         self.data.len() + self.scales.len() * 4
     }
 
-    // Packed bytes share aligned workspace with scales; never read the byte region as f32.
     pub fn apply(
         &self,
         x: &[f32],

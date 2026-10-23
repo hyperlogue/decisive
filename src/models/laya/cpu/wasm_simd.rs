@@ -365,7 +365,6 @@ pub(super) fn check() -> anyhow::Result<usize> {
             }
         }
     }
-    // Prune queries only; selected outputs still attend to every allowed key/value.
     for n in [1, 7, 33, 129, 513] {
         let (heads, dim) = (2, 16);
         let d = heads * dim;

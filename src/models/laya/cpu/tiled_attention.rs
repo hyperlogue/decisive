@@ -2,7 +2,6 @@ use rayon::prelude::*;
 
 #[derive(Clone, Copy)]
 struct Output(*mut f32);
-// Tasks write disjoint head columns and never read the destination.
 unsafe impl Send for Output {}
 unsafe impl Sync for Output {}
 impl Output {

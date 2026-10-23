@@ -1,10 +1,5 @@
-//! Data-free, load-time Q4 fitting. No evaluation inputs or labels are used.
-//! Integer weights retain the existing AVX2 dot-product layout and group size.
-
 use super::int8::{GROUP, group_scale_bits, pack_bits};
 
-// NormalFloat4 levels from QLoRA / bitsandbytes (arxiv.org/abs/2305.14314).
-// The embedding experiment additionally fits each block's scale by least squares.
 pub(super) const NF4: [f32; 16] = [
     -1.,
     -0.6961928,
@@ -24,9 +19,9 @@ pub(super) const NF4: [f32; 16] = [
     1.,
 ];
 
-/// Multi-start clipping search followed by alternating nearest-code assignment
-/// and least-squares scale fitting. Signed scales use all 16 codes [-8, 7], with
-/// both orientations considered. The original absmax result is also a candidate.
+
+
+
 pub(super) fn mse(x: &[f32], out: &mut [i8], avx2: bool) -> f32 {
     assert!(!x.is_empty() && x.len() <= GROUP && out.len() == x.len());
     let maximum = x.iter().fold(0_f32, |a, v| a.max(v.abs()));
@@ -35,8 +30,6 @@ pub(super) fn mse(x: &[f32], out: &mut [i8], avx2: bool) -> f32 {
     if maximum == 0. {
         return baseline;
     }
-    // Normalize before fitting, avoiding overflow and cancellation for BF16's
-    // large dynamic range. Error is measured directly, not via x² - 2xq + q².
     let mut normalized = [0.; GROUP];
     for (v, &x) in normalized.iter_mut().zip(x) {
         *v = x / maximum;
@@ -136,7 +129,6 @@ unsafe fn stats_avx2(x: &[f32], scale: f32) -> (f32, f32, f32) {
 }
 
 fn nf4_code(value: f32) -> usize {
-    // Midpoint binary search, with ties assigned to the lower code.
     let mut low = 0;
     let mut high = 15;
     while low < high {
@@ -150,8 +142,8 @@ fn nf4_code(value: f32) -> usize {
     low
 }
 
-/// Affine INT4 with jointly fitted scale and offset. The offset removes the
-/// block-mean reconstruction bias for fixed codes, at one extra FP32 per group.
+
+
 pub(super) fn affine(x: &[f32], out: &mut [i8], avx2: bool) -> (f32, f32) {
     assert!(!x.is_empty() && x.len() <= GROUP && out.len() == x.len());
     let maximum = x.iter().fold(0_f32, |a, v| a.max(v.abs()));

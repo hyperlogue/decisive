@@ -57,9 +57,6 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
   const pendingReads=new Map();
   function loadLayer(layer,prefetch) {
     const ranges=packed?packedManifest.layers[layer].tensors.map(t=>({...t,file:layer+2})):JSON.parse(model.ranges(layer));
-    // Split each file into tensor-aligned reads of at least 4 MiB: concurrent
-    // range reads are substantially faster than one large read, and aligned
-    // splits let every tensor be staged without reassembly.
     const groups=[];
     for(const file of new Set(ranges.map(r=>r.file))){
       let current=null;
@@ -156,8 +153,6 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
           for(let layer=0;layer<32;layer++){
             progress(`Layer ${layer+1}/32`);
             const readStart=performance.now(),groups=await reading,loaded=performance.now();
-            // Read the next layer while the queue executes this one. Fetch its
-            // range plan before waitLayer acquires an exclusive Wasm borrow.
             lookahead=layer<31?loadLayer(layer+1,true):null;
             if(pending===2)await collect();
             const uploadStart=performance.now();
@@ -176,8 +171,6 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
           }
           while(pending)await collect();
         }catch(error){
-          // The model owns all submitted resources until abortQueued drains
-          // them, including work submitted before an encoding failure.
           const drained=await Promise.allSettled([reading,lookahead,model.abortQueued()]);
           if(drained[2].status==='rejected')throw new AggregateError([error,drained[2].reason],'Queued inference and cleanup failed');
           throw error;
@@ -197,8 +190,6 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
         for(let layer=0;layer<32;layer++){
           progress(`Layer ${layer+1}/32`);
           const start=performance.now();
-          // ranges() borrows the model: obtain the next read plan before the
-          // asynchronous runLayer() acquires its exclusive Wasm borrow.
           let next=null;
           if(prefetch&&layer<31){
             const reading=loadLayer(layer+1,true);
@@ -214,13 +205,10 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
               phases:JSON.parse(value),pack_compute_ms:performance.now()-start
             }));
           }catch(error){
-            // A synchronous binding failure cannot notify the submission wait.
             weightBuffers.reset();
             if(next)await Promise.allSettled([next]);
             throw error;
           }
-          // Always drain both tasks on failure. In particular, an I/O error
-          // must not permit prepare/dispose while a layer still uses its bank.
           const [computed,prefetched]=await Promise.allSettled([running,next]);
           if(computed.status==='rejected')throw computed.reason;
           if(prefetched.status==='rejected')throw prefetched.reason;

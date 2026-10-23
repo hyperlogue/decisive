@@ -44,7 +44,6 @@ pub async fn init(threads: usize) -> Result<(), JsValue> {
             ));
         }
     }
-    // Partial initialization cannot retry in this Rayon registry; reload the owning Worker.
     wasm_bindgen_futures::JsFuture::from(wasm_bindgen_rayon::init_thread_pool(threads)).await?;
     WORKERS.store(threads, Ordering::Release);
     Ok(())

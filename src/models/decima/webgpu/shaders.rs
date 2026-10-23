@@ -11,7 +11,6 @@ fn gelu(v: vec4<f32>) -> vec4<f32> {
 }
 "#;
 
-// Sum over a 128-thread workgroup, in the same order on every row.
 const TOTAL: &str = r#"var<workgroup> red: array<f32, 128>;
 fn total(v: f32, t: u32) -> f32 {
     red[t] = v;
@@ -38,7 +37,6 @@ pub(super) const SLICE: usize = 384;
 pub(super) enum Accumulate {
     Whole,
     Sliced,
-    // One slice per workgroup z, written as partials for `reduce`.
     Split,
 }
 
@@ -95,7 +93,6 @@ pub(super) fn gemm(
             let ar = i / 4u; let ak = (i % 4u) * 4u;
             var a = vec4<f32>(0.0);
             if (row0 + ar < m) {{ a = x[(row0 + ar) * k4 + (k0 + ak) / 4u]; }}
-            // Scalar stores: threads writing lanes of one shared vec4 would race.
             at[(ak + 0u) * BM + ar] = a.x;
             at[(ak + 1u) * BM + ar] = a.y;
             at[(ak + 2u) * BM + ar] = a.z;
@@ -145,7 +142,6 @@ var<workgroup> bt: array<vec4<f32>, 256>;
 @compute @workgroup_size(16, {ty})
 fn main(@builtin(workgroup_id) g: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>, @builtin(local_invocation_index) lid: u32) {{
     let m = p.a.x; let n4 = p.a.y / 4u; let k = p.a.z; let k4 = k / 4u;
-    // Masked ids let the compiler drop bounds checks on the workgroup arrays.
     let tx = l.x & 15u; let ty = l.y & {ymask}u; let li = lid & {lmask}u;
     let row0 = g.y * BM; let col0 = g.x * 16u;
     {body}
@@ -158,7 +154,6 @@ fn main(@builtin(workgroup_id) g: vec3<u32>, @builtin(local_invocation_id) l: ve
     )
 }
 
-// y = r + (Σ partials in slice order + bias) for the partials of a split GEMM.
 pub(super) fn reduce() -> String {
     format!(
         r#"{PARAMS}
@@ -179,7 +174,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     )
 }
 
-// LayerNorm over one row per workgroup; `embed` repeats the same arithmetic.
 pub(super) fn norm() -> String {
     let lanes = D / 4;
     format!(
@@ -206,10 +200,6 @@ fn main(@builtin(workgroup_id) g: vec3<u32>, @builtin(local_invocation_index) t:
     )
 }
 
-// Word + type + position embeddings of each (token id, position) table pair, then the embedding
-// LayerNorm, one row per workgroup in table order. The vocabulary is split into buffers of
-// 65536 rows to fit storage binding limits; `pre` holds the type row, the norm weight and bias,
-// then the position rows.
 pub(super) fn embed() -> String {
     let lanes = D / 4;
     format!(
@@ -351,7 +341,6 @@ fn main(@builtin(workgroup_id) g: vec3<u32>, @builtin(local_invocation_index) li
     let qi = li % {queries}u; let split = li / {queries}u;
     let scale = bitcast<f32>(p.b.z);
     let hc = g.y * {c4}u; let kv4 = p.a.z / 4u;
-    // Spare threads of a short tile repeat the last query and store nothing.
     let row = min(first + qi, first + qn - 1u) * (p.a.x / 4u) + p.a.y / 4u + hc;
     {load_q}
     var m = -3.0e38; var l = 0.0;
@@ -476,7 +465,6 @@ pub(super) fn attention_tiled(head: usize, queries: usize, keys: usize) -> Strin
 @group(0) @binding(2) var<storage, read> t: array<u32>;
 @group(0) @binding(3) var<storage, read_write> y: array<f32>;
 @group(0) @binding(4) var<uniform> p: Params;
-// Query pairs dimension-major, keys dimension-major in groups of {kpt}, values key-major.
 var<workgroup> qs: array<vec2<f32>, {qs}>;
 var<workgroup> ks: array<{kv}, {ks}>;
 var<workgroup> vs: array<{dv}, {vs}>;
@@ -558,12 +546,10 @@ fn main(@builtin(workgroup_id) g: vec3<u32>, @builtin(local_invocation_index) li
     )
 }
 
-// Workgroup memory the tiled attention kernel needs, in bytes.
 pub(super) fn attention_tiled_storage(head: usize, queries: usize, keys: usize) -> usize {
     4 * (head * queries + 2 * head * keys + keys * queries + 512)
 }
 
-// Mean of each (first row, row count, output row) segment.
 pub(super) fn mean() -> String {
     let lanes = D / 4;
     format!(
@@ -584,7 +570,6 @@ fn main(@builtin(workgroup_id) g: vec3<u32>, @builtin(local_invocation_index) li
     )
 }
 
-// Copies rows by (source row, destination row) pairs.
 pub(super) fn copy() -> String {
     let lanes = D / 4;
     format!(

@@ -1,0 +1,12 @@
+{
+  "name": "decisive-privacy-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "build": "python3 build.py"
+  },
+  "devDependencies": {
+    "@fontsource/noto-sans-sc": "5.3.1"
+  }
+}

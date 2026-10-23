@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Download pinned benchmark inputs and invoke llama.cpp's official converters.
-The download override resolves the already pinned local base instead of fetching it twice.
-No conversion math is implemented here.
-"""
+
 import argparse
 import hashlib
 import json

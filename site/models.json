@@ -1,0 +1,226 @@
+{
+  "default": "decima-small",
+  "models": [
+    {
+      "id": "decima-small",
+      "name": "Decima Small",
+      "engine": "decima",
+      "available": true,
+      "storeName": "decisive-privacy-decima-small-v1",
+      "repository": "amyrmahdy/decima-small",
+      "revision": "14d09cabc1b4e23106ae4413eef852a568ced77b",
+      "files": {
+        "pytorch/decima.json": {
+          "bytes": 319,
+          "sha256": "bfa9311b8a6ada93691b51edd26088d1a53c0071eb17e4cb014c6d7fe602d1e8"
+        },
+        "pytorch/encoder/config.json": {
+          "bytes": 756,
+          "sha256": "86b060dde794ff01a1a69ae82c9be1e59eff692f3011ec10d4d9f89e65337568"
+        },
+        "pytorch/encoder/model.safetensors": {
+          "bytes": 470637416,
+          "sha256": "2bc43026b30d506e416579b891d361a41f25bca32d91f8138261f2a819e46566"
+        },
+        "pytorch/encoder/tokenizer.json": {
+          "bytes": 17082987,
+          "sha256": "255f5e32cb320b4dc2b31e0f203832fecafe87ca4cc87c3c41eb8ccae73f441a"
+        },
+        "pytorch/encoder/tokenizer_config.json": {
+          "bytes": 597,
+          "sha256": "04a6c7f6ba3ae2d7fc5727c5de4223fad062b1e131bf0ed8145ae7ffb39bc938"
+        },
+        "pytorch/head.safetensors": {
+          "bytes": 18945996,
+          "sha256": "5f2a149e4a4f9f1b2b97df2d5ed98b006cddae53f9628a812f76eb4aae40aebf"
+        },
+        "LICENSE": {
+          "bytes": 11358,
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      }
+    },
+    {
+      "id": "pplx-flash-q4",
+      "name": "Pplx Flash · Q4",
+      "engine": "pplx-q4",
+      "available": true,
+      "storeName": "decisive-privacy-pplx-q4-v1",
+      "repository": "rickye26/pplx-decider-flash-v1.2-q4",
+      "revision": "a264abdd91f7f002d929bb038acffd51c453115d",
+      "files": {
+        "LICENSE": {
+          "bytes": 11544,
+          "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+        },
+        "NOTICE": {
+          "bytes": 132,
+          "sha256": "381fb81e814716a5ef8e5eae26a08607d052cf12f019dba9da9e81298ef5cb75"
+        },
+        "config.json": {
+          "bytes": 2898,
+          "sha256": "1bdb718faa99e32673f1622ea2f536affe20867bcb4703888aac9a030ec59e22"
+        },
+        "decision_config.json": {
+          "bytes": 5435,
+          "sha256": "6d59a4e66f459596cad6f3ff932c635e379f1dc1c49819357869de8abe01722f"
+        },
+        "joint_config.json": {
+          "bytes": 248,
+          "sha256": "ecc88efc2a8ebd81ddf93f7d722e35b2829fd7526b5ce754db53395aa49fb510"
+        },
+        "packed-q4-e4.json": {
+          "bytes": 188333,
+          "sha256": "fdf3db19068d1126f93d235793ae380ef1856dcae0e3a71fcabf21005a4f9117"
+        },
+        "q4-e4-embedding.bin": {
+          "bytes": 357580800,
+          "sha256": "b8b0c0a892390639817f3710163b982a99829434b2d114aea4823dd0d4a50fb8"
+        },
+        "q4-e4-layer-00.bin": {
+          "bytes": 63574400,
+          "sha256": "c0b3ca49bda00056d138a8f829405c85e38f0533aa8d751b05c72d1643fac864"
+        },
+        "q4-e4-layer-01.bin": {
+          "bytes": 63574400,
+          "sha256": "3e64559ca22b71ff7f7ccb0a254914c3c4fc96a75b2dd231416f33abeb266cbe"
+        },
+        "q4-e4-layer-02.bin": {
+          "bytes": 63574400,
+          "sha256": "19031eae38625e61e555e7ecdb6cb8ba33b6aea5ca589161f3524ae79a090eff"
+        },
+        "q4-e4-layer-03.bin": {
+          "bytes": 60468224,
+          "sha256": "48af70ffd6ff8770bf6568ade2a517e29f01a703a33937c7e82ef7615377215d"
+        },
+        "q4-e4-layer-04.bin": {
+          "bytes": 63574400,
+          "sha256": "5df2206cfa79f0fca86dcbea01c6496389ebe54cf9366e7af935c988aef17abf"
+        },
+        "q4-e4-layer-05.bin": {
+          "bytes": 63574400,
+          "sha256": "06ea1ab8f845df68f59e89bd1554d9f2aae7fa2e8def1a608bdb51de90b8cb85"
+        },
+        "q4-e4-layer-06.bin": {
+          "bytes": 63574400,
+          "sha256": "cefeaefe40e460b698afc88b62b65031f5a5f4ea1aece493231b4cd9512f3ac7"
+        },
+        "q4-e4-layer-07.bin": {
+          "bytes": 60468224,
+          "sha256": "e245dcd066fd3b873916c480f78600cc7357dc22fbc4edb689b7c1e4f9e34178"
+        },
+        "q4-e4-layer-08.bin": {
+          "bytes": 63574400,
+          "sha256": "65a0ea8a48f73699e09d157f11a32d852562c11905e8befff03e790c6ffae841"
+        },
+        "q4-e4-layer-09.bin": {
+          "bytes": 63574400,
+          "sha256": "6abd02d501f78f89805329a10fed5151005090db1224b168f0693c7166d2f846"
+        },
+        "q4-e4-layer-10.bin": {
+          "bytes": 63574400,
+          "sha256": "363e433188737312447ed544475fd1695ae50210ce4de6ded672c0fff4ec1fc4"
+        },
+        "q4-e4-layer-11.bin": {
+          "bytes": 60468224,
+          "sha256": "8ddc87865838cc00b9453d149015ad6f47ac069d4425ddc1f7f3bcaf4a5d3631"
+        },
+        "q4-e4-layer-12.bin": {
+          "bytes": 63574400,
+          "sha256": "8299d3ef5823df9a21f18e121e318d3b83035f2c9ab9c47678300444164844d1"
+        },
+        "q4-e4-layer-13.bin": {
+          "bytes": 63574400,
+          "sha256": "0cd274e1724c8c78129bf8352b7c17bc49e1539944dcf5bf451851bddea283c7"
+        },
+        "q4-e4-layer-14.bin": {
+          "bytes": 63574400,
+          "sha256": "4ee48751c3fa44fe5b72d1577f1544e984580adda849ea21ff21803f09f4a29a"
+        },
+        "q4-e4-layer-15.bin": {
+          "bytes": 60468224,
+          "sha256": "92ca12ba707d44146a8b26a1325136f412e2f8b3c1fb68c17f658717af416a58"
+        },
+        "q4-e4-layer-16.bin": {
+          "bytes": 63574400,
+          "sha256": "2f27f3272c36339fcb162870e2fb8c784eb07766c0ed20c7e7af2b26150a9e0c"
+        },
+        "q4-e4-layer-17.bin": {
+          "bytes": 63574400,
+          "sha256": "966d661599f54accc1fc25ff852373dd70d0df77eced06bf43ae257f735080cd"
+        },
+        "q4-e4-layer-18.bin": {
+          "bytes": 63574400,
+          "sha256": "c82f1605492afd5ce09ba2d72f8efd583bf4e42338a3c9fe5b3210ed55575160"
+        },
+        "q4-e4-layer-19.bin": {
+          "bytes": 60468224,
+          "sha256": "f4de8198c01d59f2678dbfb81273b2f5b72d838948863e416ecec3fb12719a56"
+        },
+        "q4-e4-layer-20.bin": {
+          "bytes": 63574400,
+          "sha256": "8f368508428c7fc48b2fe22567212d6cec8010f29fdbb50bc5456c9a3caf9874"
+        },
+        "q4-e4-layer-21.bin": {
+          "bytes": 63574400,
+          "sha256": "f3eb4a9c9879afb28175b2ad54dedbbdb0cbd8757f8a06b80fa368bf97984443"
+        },
+        "q4-e4-layer-22.bin": {
+          "bytes": 63574400,
+          "sha256": "18af44385f21b127a54272c740d9dc4cd678af3c8f39581d831879730a311ec4"
+        },
+        "q4-e4-layer-23.bin": {
+          "bytes": 60468224,
+          "sha256": "ed58e59ca4f1b852579291a4c934fb01091df08901da4a0d17a692396563a52c"
+        },
+        "q4-e4-layer-24.bin": {
+          "bytes": 63574400,
+          "sha256": "95583433d973e4610c0d1e001e8a382f456391e9c3ede9f339b025f6db0667d9"
+        },
+        "q4-e4-layer-25.bin": {
+          "bytes": 63574400,
+          "sha256": "1a23d697b46d988fc65097ff34efc19962e05f99dcbd611ded312b01d3b95a73"
+        },
+        "q4-e4-layer-26.bin": {
+          "bytes": 63574400,
+          "sha256": "20a20ba782e9b5861e1cddbaa251d0aab40f79937aa50f7e4e4c8caf8fcf7fcb"
+        },
+        "q4-e4-layer-27.bin": {
+          "bytes": 60468224,
+          "sha256": "5ba6799eddaf2b44d4a847b93f5bc3280bc57fcb8bb185f705a0102611f47301"
+        },
+        "q4-e4-layer-28.bin": {
+          "bytes": 63574400,
+          "sha256": "e52c69ec852c1ed6fd673d62cf45d3461f4a7a3760fbfa063c591249b9acdc2a"
+        },
+        "q4-e4-layer-29.bin": {
+          "bytes": 63574400,
+          "sha256": "543b2cea53dc7756d1ae70dd9419c5b54494e58e062eb14436d165f3e28dcf68"
+        },
+        "q4-e4-layer-30.bin": {
+          "bytes": 63574400,
+          "sha256": "bd9d2ab5025a9dd5a12b24f26939d04666b57951fd634dfcf5176c9a052c66a5"
+        },
+        "q4-e4-layer-31.bin": {
+          "bytes": 60468224,
+          "sha256": "17f6053fc3345d6da6bf3dc7842e837812cf8a846a4ff0b12ccab91faa44375e"
+        },
+        "q4-e4-norm.bin": {
+          "bytes": 5120,
+          "sha256": "96294c653d4e8ab158cdae0b7e794559654ffdc62db880725ed714d47f708621"
+        },
+        "q4-e4-readout.bin": {
+          "bytes": 367200,
+          "sha256": "8973f072a363b42a918aaf97c965c2abee2a1e1b855eaa071f89de413a4e4257"
+        },
+        "tokenizer.json": {
+          "bytes": 19989492,
+          "sha256": "6f32ce20dc35f57a7f9ad1eac03525bd7d30f9df8cea6507e958279cc3657706"
+        }
+      },
+      "requiredFeatures": [
+        "shader-f16"
+      ]
+    }
+  ]
+}

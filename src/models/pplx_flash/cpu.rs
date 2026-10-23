@@ -54,7 +54,6 @@ impl Linear {
                 for k in 0..input {
                     for c in 0..width {
                         let at = ((panel * 16 + c) * input + k) * 2;
-                        // Shape validation bounds both pointers; unaligned reads also accept borrowed byte buffers.
                         unsafe {
                             *weight_bf16.get_unchecked_mut((panel * input + k) * 16 + c) =
                                 u16::from_le(std::ptr::read_unaligned(
@@ -528,7 +527,6 @@ pub(super) fn softmax(x: &mut [f32]) {
         *v /= sum;
     }
 }
-// Jobs write disjoint columns and join before Linear::apply releases the output borrow.
 #[cfg(all(feature = "cpu", target_arch = "x86_64"))]
 struct Columns(*mut f32);
 #[cfg(all(feature = "cpu", target_arch = "x86_64"))]

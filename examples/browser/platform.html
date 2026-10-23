@@ -86,8 +86,6 @@ try {
   loadMs=performance.now()-loadStart;
   bytes.length=0;
   if(precision.startsWith('int8')) { if(backend==='webgpu')throw Error('GPU INT8 unavailable'); const quantStart=performance.now();model.quantize_encoder(precision==='int8',32);loadMs+=performance.now()-quantStart; }
-  // Preserve numeric JSON types in structured states. Parsing and stringifying
-  // through JavaScript turns 532.0 into 532, changing the model's input text.
   const input=(await(await fetch(options.get('input')||'/benches/contracts.jsonl')).text()).trim().split('\n');
   const expected=await jsonl(options.get('expected')||'/tests/fixtures/outputs/contracts.jsonl');
   fixtures=input.map((request_json,i)=>({request_json,expected:expected[i]}));

@@ -77,8 +77,6 @@ impl Matrix {
         let mut data = vec![0; output.div_ceil(8) * groups * GROUP * 8 / divisor];
         let mut scales = vec![0.; output.div_ceil(8) * groups * 8];
         let mut offsets = vec![0.; if affine { scales.len() } else { 0 }];
-        // Use one temporary per-panel offset slot even for symmetric modes so
-        // the packing traversal and final resident layout remain shared.
         let mut panel_offsets = vec![vec![]; output.div_ceil(8)];
         data.par_chunks_mut(groups * GROUP * 8 / divisor)
             .zip(scales.par_chunks_mut(groups * 8))
@@ -392,7 +390,6 @@ unsafe fn pack_avx2(x: &[f32], out: &mut [i8], scale: f32, limit: f32) {
     }
 }
 
-// Each job owns disjoint output columns and joins before the mutable borrow ends.
 #[cfg(target_arch = "x86_64")]
 struct Columns(*mut f32);
 #[cfg(target_arch = "x86_64")]
@@ -461,8 +458,6 @@ unsafe fn project_buffered(
     unsafe {
         let groups = w.input.div_ceil(GROUP);
         let count = groups * GROUP * 8;
-        // At most 72 KiB for the checkpoint's largest reduction. Reuse the panel
-        // across tokens and Rayon jobs without expanding the resident matrix.
         expanded.resize(count, 0);
         for panel in start..end {
             for at in (0..count).step_by(32) {
@@ -560,7 +555,6 @@ unsafe fn rows<const R: usize, const Q4: bool>(
                             .cast::<i32>()
                             .read_unaligned(),
                     );
-                    // Both codes are in [-127,127]: each pair fits i16, including extrema.
                     let pair = _mm256_maddubs_epi16(magnitude, _mm256_sign_epi8(a, b));
                     acc[r] = _mm256_add_epi32(acc[r], _mm256_madd_epi16(pair, one));
                 }
@@ -682,7 +676,6 @@ mod tests {
     }
     #[test]
     fn q4_and_q8_match_independent_grouped_dots() -> Result<()> {
-        // Odd widths and panels exercise both nibble order and zero padding.
         for (wb, ab) in [(8, 8), (4, 8), (4, 4)] {
             for (m, k, n) in [
                 (0usize, 7usize, 1usize),
@@ -769,7 +762,6 @@ mod tests {
                                 "W{wb}A{ab} {m}x{k}x{n}: {actual} != {expected}"
                             );
                         }
-                        // Reusing buffers with different input must never reuse stale activation codes.
                         pool.install(|| w.apply(&vec![0.; m * k], &mut a, &mut scratch));
                         assert!(a.iter().all(|&v| v == 0.));
                     }

@@ -356,7 +356,6 @@ fn worker(job: &Job) -> Result<Value> {
     for phase in 0..2 {
         let rounds = if phase == 0 { job.warmup } else { job.rounds };
         for round in 0..rounds {
-            // Measured balance must not depend on warmup parity.
             let mut row = Vec::new();
             for ci in order(job.cases.len(), round) {
                 let request_count = if job.phase == "startup" {
@@ -506,7 +505,6 @@ fn child(out: &Path, name: &str, job: &Job) -> Result<Value> {
         .stdin(Stdio::null())
         .status()?;
     let wall_ms = start.elapsed().as_secs_f64() * 1000.;
-    // Local job paths are private; exclude them from shareable results.
     fs::remove_file(job_file)?;
     ensure!(
         status.success(),

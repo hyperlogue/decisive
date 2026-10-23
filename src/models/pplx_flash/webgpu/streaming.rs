@@ -1,5 +1,3 @@
-//! Two disjoint banks of raw checkpoint weights. The uploader is a separate
-//! Wasm object so it can run while BrowserGpu::run_layer holds &mut self.
 use super::{Gpu, Tensor};
 use crate::pplx_flash::weights::{Index, Range};
 use anyhow::{Result, ensure};
@@ -23,8 +21,6 @@ struct Bank {
 }
 impl Bank {
     fn assign(&mut self, layer: usize, ranges: &[Range], packed: bool) -> Result<()> {
-        // Retain only buffers needed by this layer's shape. In particular, a
-        // linear-attention/full-attention transition cannot grow a bank's pool.
         let mut needed = HashMap::<u64, usize>::new();
         for r in ranges {
             *needed.entry(weight_bytes(r, packed)?).or_default() += 1;
@@ -143,8 +139,6 @@ impl WeightBuffers {
         {
             return Err(error("incomplete or already sealed weight bank"));
         }
-        // wgpu's native write_buffer defers transfers until submit. On WebGPU
-        // this also explicitly enqueues uploads before the next layer dispatch.
         self.queue.submit([]);
         bank.ready = true;
         Ok(())

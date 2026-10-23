@@ -6,13 +6,11 @@ struct Params { a:vec4<u32>, b:vec4<u32>, c:vec4<u32>, d:vec4<u32> }
 @group(0) @binding(4) var<uniform> p:Params;
 var<workgroup> at:array<vec4<f16>,1024>;var<workgroup> bt:array<vec4<f16>,1024>;
 var<workgroup> sa:array<f32,64>;var<workgroup> sb:array<f32,64>;
-// Bytes 0/2 and 1/3 as f16 1024+(b^128), minus 1152: the exact signed byte.
 fn unpack_a(v:u32)->vec4<f16>{
  let lo=bitcast<vec2<f16>>(((v&0x00ff00ffu)^0x00800080u)|0x64006400u)-vec2<f16>(1152.0h);
  let hi=bitcast<vec2<f16>>((((v>>8u)&0x00ff00ffu)^0x00800080u)|0x64006400u)-vec2<f16>(1152.0h);
  return vec4<f16>(lo.x,hi.x,lo.y,hi.y);
 }
-// Nibbles i and i+4 as f16 1024+n, minus 1032: the exact signed code.
 fn nib2(word:u32,s:u32)->vec2<f16>{return bitcast<vec2<f16>>(((word>>s)&0x000f000fu)|0x64006400u)-vec2<f16>(1032.0h);}
 @compute @workgroup_size(16,16)
 fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_id) local:vec3<u32>){

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="See what personal information your message may reveal. A live demo of Decisive inference in your browser using WebGPU.">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <title>Privacy check</title>
+  <link rel="canonical" href="https://decisive.hyperlogue.tech/demo/private-info-detector/">
+  <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Decisive">
+  <meta property="og:title" content="Privacy check · Decisive">
+  <meta property="og:description" content="See what personal information your message may reveal, analyzed by an AI model running entirely in your browser with WebGPU.">
+  <meta property="og:url" content="https://decisive.hyperlogue.tech/demo/private-info-detector/">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="app-shell" id="app-shell">
+    <header class="site-header" id="site-header">
+      <div class="header-primary">
+        <div class="brand"><span class="brand-mark" data-icon="shield"></span><div class="brand-text"><span class="brand-name" translate="no">Decisive</span><h1 id="page-title" data-i18n="pageTitle">Privacy check</h1></div></div>
+        <nav class="header-actions" aria-label="Settings" data-aria="setup">
+          <label class="language-control"><span data-icon="globe"></span><span class="sr-only" data-i18n="language">Language</span><select id="language-picker"><option value="en">English</option><option value="es">Español</option><option value="zh">中文</option><option value="ar">العربية</option></select></label>
+          <button class="icon-button" id="open-setup" type="button" data-title="setup" aria-label="Setup"><span data-icon="sliders"></span></button>
+        </nav>
+      </div>
+      <p id="page-description" class="page-description" data-i18n="pageDescription">See what personal information your message may reveal as you type. This demo shows Decisive running AI inference directly in your browser with WebGPU.</p>
+      <div class="header-secondary">
+        <div class="privacy-wrap">
+          <button class="privacy-pill" id="privacy-help" type="button" aria-expanded="false" aria-controls="privacy-tooltip"><span data-icon="shield"></span><span data-i18n="onDevice">Your messages stay in this browser.</span></button>
+          <div class="privacy-tooltip" id="privacy-tooltip" role="tooltip" hidden><p data-i18n="privateBody">Analysis runs on this device. Model files are downloaded from Hugging Face. Your drafts and results are never uploaded. Sharing an image is your choice.</p></div>
+        </div>
+      </div>
+    </header>
+    <main id="main-content">
+      <div class="workspace" id="privacy-workspace">
+        <div class="draft-region" id="draft-region">
+          <div class="composer" id="draft-composer">
+            <div class="composer-top"><label for="message-input" data-i18n="yourReply">Your message</label></div>
+            <textarea id="message-input" dir="auto" spellcheck="false" maxlength="4000" aria-describedby="composer-status"></textarea>
+            <div class="composer-bottom"><span class="composer-status"><span class="little-dot" id="composer-dot"></span><span id="composer-status"></span></span><span id="character-count">0</span></div>
+          </div>
+        </div>
+        <div class="analysis-scroll" id="analysis-scroll" tabindex="0" aria-labelledby="analysis-title">
+        <div id="analysis-error" class="notice error" role="alert" hidden></div>
+<aside class="analysis-panel" id="live-analysis" aria-labelledby="analysis-title">
+        <div class="section-heading"><h2 id="analysis-title" data-i18n="liveAnalysis">Analysis</h2><span class="live-status" id="analysis-status"><span class="little-dot"></span><span data-i18n="live">Live</span></span></div>
+        <dl class="inference-metrics" id="inference-metrics">
+          <div><dt data-i18n="model">Model</dt><dd id="runtime-model">Decima Small</dd></div>
+          <div><dt data-i18n="inferenceTime">Inference time</dt><dd id="runtime-time">—</dd></div>
+          <div data-title="inputTokensHelp"><dt data-i18n="inputTokens">Input tokens</dt><dd id="runtime-tokens">—</dd></div>
+        </dl>
+        <div class="analysis-summary" id="analysis-summary" role="group" aria-label="Possible disclosures" data-aria="cardResults">
+          <div class="signal-list" id="signal-list"></div>
+          <div class="empty-signals" id="empty-signals"><span data-icon="shield"></span><span id="empty-signal-text"></span></div>
+          <p id="analysis-caption" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+        </div>
+        <details class="analysis-details" id="analysis-details">
+          <summary id="show-details-toggle"><span id="details-label" data-i18n="showDetails">Show details</span><span class="details-chevron" data-icon="chevron"></span></summary>
+          <div class="details-content" id="details-content">
+            <div class="score-header"><span data-i18n="category">Category</span><span data-i18n="modelScore">Model score</span></div>
+            <div id="score-list" class="score-list"></div>
+            <p class="explanation" data-i18n="scoreExplanation"></p><div class="score-legend"><span><i class="legend-dot mild"></i><span data-i18n="mild">Mild</span></span><span><i class="legend-dot strong"></i><span data-i18n="sensitive">Sensitive</span></span><span data-i18n="scoreNote">Score ≠ severity</span></div>
+            <details id="raw-analysis" class="raw-analysis"><summary><span data-icon="code"></span><span data-i18n="raw">Input / output</span><span class="raw-chevron" data-icon="chevron"></span></summary><div class="raw-inner"><pre id="raw-output" dir="ltr"></pre></div></details>
+          </div>
+        </details>
+        <div class="analysis-footer" id="analysis-footer"><button type="button" class="share-result secondary-button" id="share-result"><span data-icon="share"></span><span data-i18n="shareResult">Share result</span></button><p id="export-status" class="share-feedback" role="status"></p></div>
+      </aside>
+        </div>
+      </div>
+    </main>
+  </div>
+    <dialog id="models-dialog" class="modal models-modal" aria-labelledby="models-title">
+        <div class="modal-heading"><h2 id="models-title" data-i18n="models">Models & storage</h2><button type="button" id="close-models" class="icon-button" data-title="close" aria-label="Close" autofocus><span data-icon="close"></span></button></div><div class="models-body"><label class="model-label" for="storage-model" data-i18n="model">Model</label><select id="storage-model" class="model-select"></select>
+        <div class="model-heading"><span data-icon="chip"></span><div><h3 id="model-name">Decima Small</h3><a id="model-source" href="https://huggingface.co/amyrmahdy/decima-small" target="_blank" rel="noopener noreferrer" data-i18n="modelSource">Model source ↗</a></div><span class="model-badge" id="model-badge"></span></div>
+        <dl class="storage-stats"><div><dt data-i18n="downloadSize">Full download</dt><dd id="model-total">—</dd></div><div><dt data-i18n="storedSize">Stored on device</dt><dd id="model-stored">—</dd></div><div><dt data-i18n="remainingSize">Still to download</dt><dd id="model-remaining">—</dd></div><div><dt data-i18n="verifiedSize">Verified</dt><dd id="model-verified">—</dd></div></dl>
+        <progress id="download-progress" value="0" max="1" aria-label="Download progress" data-aria="downloadProgress"></progress>
+        <p class="progress-message" id="download-status" role="status"></p>
+        <p class="notice error" id="model-error" role="alert" hidden></p>
+        <div class="model-actions"><button id="download-model" class="primary-button" data-i18n="downloadModel">Download model</button><button id="pause-download" class="secondary-button" data-i18n="pause" hidden>Pause</button><button id="use-model" class="primary-button" data-i18n="useModel" hidden>Use model</button><button id="delete-model" class="secondary-button danger" data-i18n="deleteModel">Delete model files</button></div>
+        <p class="explanation" data-i18n="downloadNote"></p>
+        <details id="model-files-details" class="file-details" open><summary data-i18n="modelFiles">Model files</summary><ul id="model-files" class="model-files"></ul></details>
+        <div id="legacy-model" class="storage-section" hidden><h3 data-i18n="legacyModel">Previous Pplx files</h3><p id="legacy-size" class="explanation"></p><button id="delete-legacy" class="secondary-button danger" data-i18n="deleteLegacy">Delete previous files</button></div><div class="storage-section"><h3 data-i18n="browserStorage">Browser storage</h3><p id="storage-estimate" class="explanation"></p><p id="persistence-status" class="explanation"></p><button id="keep-model" class="secondary-button" data-i18n="keepModel">Keep files on this device</button><p class="explanation" data-i18n="storageNote"></p></div>
+        <p class="revision-note">Revision <code id="model-revision"></code></p>
+      </div>
+  </dialog>
+  <dialog id="setup-dialog" class="modal setup-modal" aria-labelledby="setup-title">
+    <div class="modal-heading"><h2 id="setup-title" data-i18n="setupTitle">Set up analysis</h2><button type="button" class="icon-button" id="close-setup" data-title="close" aria-label="Close"><span data-icon="close"></span></button></div>
+    <p class="modal-description" data-i18n="onDevice">Your messages stay in this browser.</p>
+    <label class="model-label" for="setup-model" data-i18n="model">Model</label><select id="setup-model" class="model-select"></select><div class="setup-model"><span data-icon="chip"></span><div><strong id="setup-model-name">Decima Small</strong><p id="setup-size"></p></div></div>
+    <div class="webgpu-status"><span>WebGPU</span><span id="cap-gpu" role="status">Checking…</span></div>
+    <p class="explanation" data-i18n="webgpuRequired">This page requires WebGPU to work.</p>
+    <p class="setup-note" data-i18n="downloadNote"></p>
+    <p id="setup-error" class="notice error" role="alert" hidden></p>
+    <div class="modal-actions"><button type="button" id="skip-setup" class="secondary-button" data-i18n="lookAround">Not now</button><button type="button" id="start-analysis" class="primary-button" autofocus data-i18n="downloadModel">Download model</button></div>
+    <button id="manage-models" class="text-button" data-i18n="models">Models & storage</button>
+  </dialog>
+  <dialog id="share-dialog" class="modal share-modal" aria-labelledby="share-title">
+    <div class="modal-heading"><h2 id="share-title" data-i18n="shareTitle">Share image</h2><button type="button" class="icon-button" id="close-share" data-title="close" aria-label="Close"><span data-icon="close"></span></button></div>
+    <div class="share-image-wrap"><img id="share-image" alt="Message and analysis preview" data-alt="imageAlt"></div>
+    <div class="share-controls"><button type="button" class="secondary-button" id="download-image"><span data-icon="download"></span><span data-i18n="download">Download PNG</span></button><button type="button" class="primary-button" id="native-share"><span data-icon="share"></span><span data-i18n="shareImage">Share image</span></button></div>
+    <p id="share-feedback" class="share-feedback" role="status"></p>
+  </dialog>
+  <dialog id="delete-dialog" class="modal" aria-labelledby="delete-title"><div class="modal-heading"><h2 id="delete-title" data-i18n="deleteModel">Delete model files</h2></div><p id="delete-description" class="setup-note"></p><div class="modal-actions"><button id="cancel-delete" class="secondary-button" data-i18n="cancel">Cancel</button><button id="confirm-delete" class="primary-button danger-fill" data-i18n="deleteModel">Delete model files</button></div></dialog>
+  <noscript>This demo needs JavaScript and WebGPU to run analysis on your device.</noscript>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,4 +1,3 @@
-"""Summarize frozen alternating-module runs; keep process and round variability."""
 from pathlib import Path
 import collections, json, math, statistics, sys
 root=Path(sys.argv[1]); destination=Path(sys.argv[2])

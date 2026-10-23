@@ -1,29 +1,3 @@
-//! AVX2/FMA exponential primitives; model dispatch and vector loops stay local.
-//! Adapted to Rust AVX2/FMA from Arm optimized-routines expf.c / exp2f_data.c,
-//! revision 59afb6fed4275e2fc249df49fce43ee5e75af178. The source algorithm has
-//! a reported 0.502 ULP nearest-rounding error; our adaptation is tested separately.
-//! FP64 range reduction preserves subnormal results; overflow/NaN lanes are handled.
-//
-// Copyright (c) 2017-2025, Arm Limited.
-// SPDX-License-Identifier: MIT
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
 use std::arch::x86_64::*;
 
 const TABLE: [u64; 32] = [
@@ -61,7 +35,6 @@ const TABLE: [u64; 32] = [
     0x3fefd0765b6e4540,
 ];
 
-// Caller verifies AVX2/FMA and nonpositive inputs (NaN/-inf are handled).
 #[cfg(any(feature = "laya", feature = "decima"))]
 #[target_feature(enable = "avx2,fma")]
 pub(crate) unsafe fn negative4(input: __m128) -> __m128 {
@@ -87,7 +60,6 @@ pub(crate) unsafe fn negative4(input: __m128) -> __m128 {
         );
         let value = _mm256_fmadd_pd(polynomial, _mm256_mul_pd(r, r), linear);
         let result = _mm256_cvtpd_ps(_mm256_mul_pd(value, scale));
-        // MAXPS selects its second operand for NaN; restore NaNs before reduction.
         _mm_blendv_ps(
             result,
             _mm_add_ps(input, input),
@@ -96,7 +68,6 @@ pub(crate) unsafe fn negative4(input: __m128) -> __m128 {
     }
 }
 
-// Caller verifies AVX2/FMA; overflow, underflow and NaN lanes are handled.
 #[cfg(any(test, feature = "kev", feature = "jev-style", feature = "pplx-flash"))]
 #[target_feature(enable = "avx2,fma")]
 pub(crate) unsafe fn exp4(input: __m128) -> __m128 {
@@ -125,7 +96,6 @@ pub(crate) unsafe fn exp4(input: __m128) -> __m128 {
         );
         let value = _mm256_fmadd_pd(polynomial, _mm256_mul_pd(r, r), linear);
         let result = _mm256_cvtpd_ps(_mm256_mul_pd(value, scale));
-        // MAXPS selects its second operand for NaN; restore NaNs before reduction.
         _mm_blendv_ps(
             result,
             _mm_add_ps(input, input),

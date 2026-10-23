@@ -536,7 +536,6 @@ pub(crate) fn run(args: Args) -> Result<()> {
                 };
                 let argv: Vec<_> = engine.command.iter().map(|s| replace(s)).collect();
                 ensure!(!argv.is_empty(), "empty engine command");
-                // Refuse stale listeners so another process cannot be measured.
                 ensure!(
                     std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
                     "port already in use"

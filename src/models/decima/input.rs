@@ -107,6 +107,16 @@ impl Input {
     pub fn ids(&self, text: &str) -> Result<Vec<u32>> {
         Self::encode(&self.tok, text)
     }
+    pub fn token_starts(&self, text: &str) -> Result<Vec<usize>> {
+        Ok(self
+            .tok
+            .encode_char_offsets(text, false)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .get_offsets()
+            .iter()
+            .map(|o| o.0)
+            .collect())
+    }
     pub fn choice_ids(&self, text: &str) -> Result<Vec<u32>> {
         let mut encoding = self
             .tok

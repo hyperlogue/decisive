@@ -1,4 +1,3 @@
-//! Jobs own scratch because nested kernels can reenter a waiting worker.
 use super::{D, Kernel, Model, Scratch, cpu, specialization};
 use rayon::prelude::*;
 
@@ -21,7 +20,6 @@ impl Default for Choice {
     }
 }
 
-// Requires all choices cold and unique; cache insertion follows the join.
 pub(super) fn prepare(
     model: &Model,
     choices: &mut [Choice],

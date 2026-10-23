@@ -138,12 +138,10 @@ fn matrix(args: &Args, path: &Path) -> Result<()> {
             )?;
         }
     }
-    // Keep paired baseline/candidate samples separate.
     let mut samples: std::collections::BTreeMap<(String, Option<String>, usize), Vec<f64>> =
         Default::default();
     for run in &results {
         if let Some(records) = run["result"]["records"].as_array() {
-            // Contract pages have no timings; retain their records without latency statistics.
             if run["result"]["all_exact"] == true
                 && run["result"]["compared"].as_u64() == Some(records.len() as u64)
                 && records.iter().all(|r| r.get("latencies_ms").is_none())

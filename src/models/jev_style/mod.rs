@@ -1,4 +1,3 @@
-//! Jev-Style 0.8B Decision v3; this module is not the hosted Jev service.
 mod backbone;
 mod cpu;
 mod input;
@@ -47,7 +46,6 @@ pub struct CacheStats {
     pub prefix_tokens_reused: usize,
     pub question_tokens_computed: usize,
 }
-// Snapshots include KV, convolution and recurrent state; capture during prefill, never rewind.
 struct CachedPrefix {
     ids: Vec<u32>,
     state: State,

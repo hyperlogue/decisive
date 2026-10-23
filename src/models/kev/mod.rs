@@ -49,7 +49,6 @@ pub struct CacheStats {
     pub prefix_tokens_reused: usize,
     pub question_tokens_computed: usize,
 }
-// Snapshots include KV, convolution and recurrent state; capture during prefill, never rewind.
 struct CachedPrefix {
     ids: Vec<u32>,
     state: State,

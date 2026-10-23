@@ -1,4 +1,3 @@
-//! Model runtimes stay local; only length rules and AVX2 exponential primitives are shared.
 #[cfg(all(
     feature = "cpu",
     target_arch = "x86_64",

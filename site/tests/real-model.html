@@ -1,0 +1,6 @@
+<!doctype html><meta charset="utf-8"><input id="files" type="file" multiple><script type="module">
+window.progress=[];window.results=[];window.failure=null;
+const worker=new Worker('./real-model-worker.js',{type:'module'});
+worker.onmessage=({data})=>{if(data.error)window.failure=data.error;else if(data.result)window.results.push(data.result);else window.progress.push(data);};
+document.querySelector('input').onchange=e=>worker.postMessage({files:Object.fromEntries([...e.target.files].map(f=>[f.name==='LICENSE'?f.name:f.name==='model.safetensors'||f.name==='config.json'||f.name.startsWith('tokenizer')?'pytorch/encoder/'+f.name:'pytorch/'+f.name,f]))});
+</script>

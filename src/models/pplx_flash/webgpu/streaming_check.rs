@@ -1,4 +1,3 @@
-//! Small real-GPU/real-Wasm integration fixture; no checkpoint download needed.
 use super::{Gpu, Tensor, streaming::WeightBuffers};
 use crate::pplx_flash::weights::Index;
 use anyhow::{Result, ensure};

@@ -3,7 +3,6 @@ use super::Matrix;
 use super::Mode;
 use core::arch::wasm32::*;
 
-// Parallel/cache chunks start at multiples of tile; the final 1–3 rows stay row-major.
 pub(super) fn pack_for_rows(
     x: &[f32],
     cols: usize,
@@ -242,7 +241,6 @@ pub(super) fn apply_parallel(
     true
 }
 
-// Serial leaf: never submit nested work while the TLS panel is borrowed.
 #[cfg(feature = "decima-wasm-threads")]
 fn apply_in_worker(
     w: &Matrix,

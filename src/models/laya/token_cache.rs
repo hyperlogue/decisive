@@ -1,4 +1,3 @@
-//! Cache unrotated first-layer Q/K/V; changing questions can shift RoPE positions.
 use crate::laya::{
     cpu::{Linear, Norm, ProjectionStrategy},
     weights::Matrix,
@@ -144,7 +143,6 @@ impl TokenCache {
             output[row * 3 * d..][..3 * d]
                 .copy_from_slice(&self.projected[unique * 3 * d..][..3 * d]);
         }
-        // Copy every requested row before eviction can invalidate hits.
         let wanted = (self.ids.len() + missing).min(self.capacity) * 4 * d;
         if self.rows.capacity() < wanted {
             self.rows.reserve_exact(wanted - self.rows.len());

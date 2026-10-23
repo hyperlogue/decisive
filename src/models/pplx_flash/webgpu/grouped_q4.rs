@@ -8,7 +8,6 @@ struct Params { a:vec4<u32>, b:vec4<u32>, c:vec4<u32>, d:vec4<u32> }
 @group(0) @binding(4) var<uniform> p:Params;
 var<workgroup> maxima:array<f32,64>;
 fn even(v:f32)->i32 {let lo=floor(v);let f=v-lo;return i32(lo)+select(0,1,f>0.5||(f==0.5&&(i32(lo)&1)==1));}
-// Four 64-value groups per workgroup, 16 threads per group, four values per thread.
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_index) l:u32){
  let group=g.y*4u+l/16u;let lane=l%16u;let valid=group<p.a.z/64u;
@@ -25,8 +24,6 @@ fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_index) l:u3
 }"#.into()
 }
 
-// quantize() applied to POINT's SiLU product of gate (x) and up (w): the down_proj input of the
-// unfused MLP without materializing the product.
 pub(super) fn quantize_silu() -> String {
     quantize()
         .replace(
@@ -267,9 +264,6 @@ pub(crate) async fn check() -> Result<serde_json::Value> {
     Ok(serde_json::json!({"passed":true,"scheme":"q4-w4a8-e4-r4-g64","checks":checks}))
 }
 
-// The fused gate/up/SiLU/quantize kernel and the SiLU-product quantizer must both emit exactly
-// the down_proj input of the unfused path: two projections, the SiLU product, then activation
-// quantization.
 async fn fused_mlp_check() -> Result<serde_json::Value> {
     let gpu = Gpu::checkpoint("q4-e4", false).await?;
     ensure!(gpu.pipelines.contains_key("q4_mlp"), "fused MLP kernel unavailable on this device");
@@ -313,8 +307,6 @@ async fn fused_mlp_check() -> Result<serde_json::Value> {
     Ok(serde_json::json!({"mode":"q4-e4-fused-mlp","rows":m,"outputs":n,"input":k,"exact_words":words}))
 }
 
-// The cooperative norm keeps NORM's summation order, so it must match NORM bit for bit,
-// including rows that end inside a tile.
 async fn norm_check() -> Result<serde_json::Value> {
     let mut gpu = Gpu::checkpoint("q4-e4", false).await?;
     ensure!(gpu.cooperative_norm, "cooperative norm rejected by its startup comparison");

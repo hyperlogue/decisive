@@ -59,7 +59,6 @@ fn checkpoint(
     };
     ensure!(!destination.exists(), "choose a new checkpoint destination");
     let file = fs::File::open(root.join("encoder/model.safetensors"))?;
-    // Source checkpoint must remain immutable during export.
     let mapping = unsafe { memmap2::Mmap::map(&file)? };
     ensure!(
         format!("{:x}", Sha256::digest(&mapping[..]))
@@ -242,7 +241,6 @@ fn checkpoint(
         Ok(())
     })();
     if result.is_err() {
-        // Cleanup owns only this newly created directory.
         let _ = fs::remove_dir_all(destination);
     }
     result

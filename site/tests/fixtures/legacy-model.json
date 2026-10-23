@@ -1,0 +1,42 @@
+{
+  "repository": "perplexity-ai/pplx-decider-flash-v1.2",
+  "revision": "6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d",
+  "files": {
+    "config.json": {
+      "bytes": 2898,
+      "sha256": "1bdb718faa99e32673f1622ea2f536affe20867bcb4703888aac9a030ec59e22"
+    },
+    "decision_config.json": {
+      "bytes": 5435,
+      "sha256": "6d59a4e66f459596cad6f3ff932c635e379f1dc1c49819357869de8abe01722f"
+    },
+    "joint_config.json": {
+      "bytes": 248,
+      "sha256": "ecc88efc2a8ebd81ddf93f7d722e35b2829fd7526b5ce754db53395aa49fb510"
+    },
+    "tokenizer.json": {
+      "bytes": 19989492,
+      "sha256": "6f32ce20dc35f57a7f9ad1eac03525bd7d30f9df8cea6507e958279cc3657706"
+    },
+    "readout.safetensors": {
+      "bytes": 1305712,
+      "sha256": "6751578171026190d4db8078e97162b404fd984646e0e9aec13844e4dd5b1711"
+    },
+    "LICENSE": {
+      "bytes": 11544,
+      "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+    },
+    "NOTICE": {
+      "bytes": 132,
+      "sha256": "381fb81e814716a5ef8e5eae26a08607d052cf12f019dba9da9e81298ef5cb75"
+    },
+    "model-00001-of-00002.safetensors": {
+      "bytes": 4972946624,
+      "sha256": "1c1a0c1ab331c7aec1b4b7932eabf80593b56c694fe2b779209c0e0413df1cef"
+    },
+    "model-00002-of-00002.safetensors": {
+      "bytes": 4105669472,
+      "sha256": "21ba8301660e066f5849b60b1a36a242fc54ca18dd9bd526fdcbc50889171b70"
+    }
+  }
+}

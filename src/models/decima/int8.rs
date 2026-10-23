@@ -156,7 +156,6 @@ impl Matrix {
             }
         }
     }
-    // Scratch holds integer operands and aligned scales; never read integer storage as f32.
     #[cfg(any(test, feature = "kernel-checks"))]
     pub fn apply(
         &self,
@@ -340,7 +339,6 @@ impl Matrix {
         true
     }
 
-    // Serial leaf: the caller may hold worker-local scratch across this call.
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
     pub(super) fn apply_serial_wasm(
         &self,

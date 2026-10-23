@@ -3,7 +3,7 @@ or the Apache License, Version 2.0, at your option. The license texts are in
 LICENSE-MIT and LICENSE-APACHE.
 
 Third-party code and data retain their original licenses and notices as
-listed below and in source files. This dual-license offer does not relicense
+listed below. This dual-license offer does not relicense
 those materials. Downloaded model weights retain their upstream licenses.
 
 The language routing rules and word lists, and the schema and long-document
@@ -37,7 +37,7 @@ same SDK's routing rules on synthetic examples.
 
 The AVX2 GEGLU experiment evaluates erff polynomial coefficients and branch
 formulas from libm 0.2.16's FreeBSD s_erff.c port. The original Sun Microsystems
-permission notice is preserved in src/models/laya/cpu/x86_avx2/activation.rs. Other lanes
+permission notice for src/models/laya/cpu/x86_avx2/activation.rs is reproduced below. Other lanes
 continue to use libm, without a new exponential approximation.
 
 The optional AVX2 attention exponential adapts the expf.c / exp2f_data.c
@@ -46,16 +46,16 @@ https://github.com/ARM-software/optimized-routines
 Revision: 59afb6fed4275e2fc249df49fce43ee5e75af178
 Copyright (c) 2017-2025, Arm Limited.
 This adaptation selects the upstream MIT license option; its full permission
-notice is retained in src/kernels/avx2_exp.rs and src/models/laya/cpu/x86_avx2/exp.rs. The Rust vector implementation,
+notice for src/kernels/avx2_exp.rs and src/models/laya/cpu/x86_avx2/exp.rs is reproduced below. The Rust vector implementation,
 softmax integration, and negative-domain handling are modifications.
 
 The model-local SIMD128 attention exponential implementations in
 src/models/laya/cpu/softmax_wasm.rs and src/models/decima/softmax_wasm.rs adapt the same Arm
-algorithm to unfused FP64 Wasm arithmetic. Each file retains the MIT notice.
+algorithm to unfused FP64 Wasm arithmetic. The MIT notices for these files are reproduced below.
 
 The Laya SIMD128 GELU implementation in src/models/laya/cpu/activation_wasm.rs evaluates
 the same libm branches with unfused FP32 arithmetic and preserves the Sun
-Microsystems permission notice.
+Microsystems permission notice reproduced below.
 
 The independent Jev-Style renderer, calibration and System One semantics were
 rewritten in Rust from the Apache-2.0 checkpoint runtime and SDK:
@@ -79,7 +79,7 @@ the respective pinned upstream implementations in CPU FP32.
 The shared AVX2 exponential primitives in src/kernels/avx2_exp.rs adapt the same
 Arm expf algorithm with FP64 intermediate arithmetic. Laya and Decima use the
 nonpositive-input variant; Jev-Style and Kev use the full-domain exponential
-through sigmoid. The file retains the MIT permission notice. Model-local
+through sigmoid. Its MIT permission notice is reproduced below. Model-local
 convolution layout, SIMD gating, and range handling are Rust modifications
 validated independently against each model's scalar path.
 
@@ -90,7 +90,7 @@ https://github.com/robertknight/rten
 Revision: bc1b852cb0ef70a6e8616e884c026f3ce3577c4f
 Copyright (c) 2026 RTen project contributors.
 These adaptations select the upstream MIT option; the permission notice is
-retained in the source files. Modifications include direct Wasm SIMD128
+reproduced below. Modifications include direct Wasm SIMD128
 intrinsics, unfused arithmetic, a bounded GELU domain and a precise fallback
 for attention exponentials below -80. Execution remains model-local.
 
@@ -102,3 +102,208 @@ Revision: 6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d
 Its model-local Qwen3.5 backbone follows Transformers 5.17.0 (Apache-2.0),
 with noncausal full attention, causal recurrent attention and marker readouts.
 The FP32 fixtures are synthetic compatibility cases, not task-quality scores.
+
+Third-party attribution and permission notices relocated from source headers
+===========================================================================
+
+src/kernels/avx2_exp.rs
+-----------------------
+AVX2/FMA exponential primitives; model dispatch and vector loops stay local.
+Adapted to Rust AVX2/FMA from Arm optimized-routines expf.c / exp2f_data.c,
+revision 59afb6fed4275e2fc249df49fce43ee5e75af178. The source algorithm has
+a reported 0.502 ULP nearest-rounding error; our adaptation is tested separately.
+FP64 range reduction preserves subnormal results; overflow/NaN lanes are handled.
+
+Copyright (c) 2017-2025, Arm Limited.
+SPDX-License-Identifier: MIT
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+src/models/decima/activation_wasm.rs
+------------------------------------
+Decima-local SIMD128 erf-based GELU. Adapted from RTen 0.27.0's
+rten-vecmath/src/{erf,exp}.rs, revision
+bc1b852cb0ef70a6e8616e884c026f3ce3577c4f, under its MIT option.
+Modifications: direct Wasm intrinsics, unfused arithmetic, saturated erf
+inputs and model-local bounds. This approximates erf, not tanh GELU.
+Copyright (c) 2026 RTen project contributors.
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+src/models/decima/softmax_avx2.rs
+---------------------------------
+Four-lane negative expf for attention, with FP64 range reduction/polynomial.
+Adapted to Rust AVX2/FMA from Arm optimized-routines expf.c / exp2f_data.c,
+revision 59afb6fed4275e2fc249df49fce43ee5e75af178. The source algorithm has
+a reported 0.502 ULP nearest-rounding error; our adaptation is tested separately.
+This is not a general exp API: inputs are nonpositive softmax differences.
+
+Copyright (c) 2017-2025, Arm Limited.
+SPDX-License-Identifier: MIT
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+src/models/decima/softmax_wasm.rs
+---------------------------------
+Decima attention expf: SIMD128 FP32 on the common [-80, 0] range,
+with the previous FP64 routine retained for smaller inputs.
+The FP64 fallback adapts Arm optimized-routines expf.c / exp2f_data.c,
+revision 59afb6fed4275e2fc249df49fce43ee5e75af178. The source algorithm has
+a reported 0.502 ULP nearest-rounding error; the Wasm adaptation uses unfused FP64 arithmetic and is tested separately.
+This is not a general exp API: inputs are nonpositive softmax differences.
+
+Copyright (c) 2017-2025, Arm Limited.
+Copyright (c) 2026 RTen project contributors.
+SPDX-License-Identifier: MIT
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+src/models/laya/cpu/activation_wasm.rs
+--------------------------------------
+SIMD evaluation of the small/medium branches of libm 0.2.16 erff.
+Arithmetic order matches the scalar implementation; other lanes fall back
+to libm. Keep this model-local so numerical choices remain independent.
+Coefficients/branch formulas derived from libm's FreeBSD s_erff.c port:
+Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+Developed at SunPro, a Sun Microsystems, Inc. business.
+Permission to use, copy, modify, and distribute this software is freely
+granted, provided that this notice is preserved.
+
+src/models/laya/cpu/softmax_wasm.rs
+-----------------------------------
+SIMD128 negative expf for attention, with FP64 range reduction/polynomial.
+Adapted to Rust SIMD128 from Arm optimized-routines expf.c / exp2f_data.c,
+revision 59afb6fed4275e2fc249df49fce43ee5e75af178. The source algorithm has
+a reported 0.502 ULP nearest-rounding error; the Wasm adaptation uses unfused FP64 arithmetic and is tested separately.
+This is not a general exp API: inputs are nonpositive softmax differences.
+
+Copyright (c) 2017-2025, Arm Limited.
+SPDX-License-Identifier: MIT
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+src/models/laya/cpu/x86_avx2/activation.rs
+------------------------------------------
+SIMD evaluation of the small/medium branches of libm 0.2.16 erff.
+The polynomial order and separate FP32 adds/multiplies match libm; other
+lanes use libm itself. No approximate reciprocal, FMA contraction or fast exp.
+Coefficients/branch formulas derived from libm's FreeBSD s_erff.c port:
+Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+Developed at SunPro, a Sun Microsystems, Inc. business.
+Permission to use, copy, modify, and distribute this software is freely
+granted, provided that this notice is preserved.
+
+src/models/laya/cpu/x86_avx2/exp.rs
+-----------------------------------
+Four-lane negative expf for attention, with FP64 range reduction/polynomial.
+Adapted to Rust AVX2/FMA from Arm optimized-routines expf.c / exp2f_data.c,
+revision 59afb6fed4275e2fc249df49fce43ee5e75af178. The source algorithm has
+a reported 0.502 ULP nearest-rounding error; our adaptation is tested separately.
+This is not a general exp API: inputs are nonpositive softmax differences.
+
+Copyright (c) 2017-2025, Arm Limited.
+SPDX-License-Identifier: MIT
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

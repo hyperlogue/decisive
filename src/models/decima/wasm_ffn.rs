@@ -37,7 +37,6 @@ pub(super) fn apply(
             tile,
         );
         cpu::add(hidden, &scratch.projected);
-        // Keep this serial: nested Rayon work can reenter the borrowed TLS scratch.
         norm.in_place(hidden);
     };
     #[cfg(feature = "decima-wasm-threads")]

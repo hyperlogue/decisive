@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark-only glue for unmodified official Python model APIs, not Decisive inference.
-"""
+
 import argparse
 import importlib.util
 import importlib.metadata
@@ -179,7 +178,7 @@ if a.generate:
                     body['questions']['q']['instructions'] = question
                     request = json.loads(json.dumps(body))
                     n, state_n = token_count(request)
-                    reset()  # Every oracle is independently recomputed, including the followup.
+                    reset()
                     expected = infer(request)
                     for key in ['latency_ms', 'timing', 'backend', 'model']:
                         expected.pop(key, None)

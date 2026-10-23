@@ -1,11 +1,3 @@
-//! SIMD evaluation of the small/medium branches of libm 0.2.16 erff.
-//! The polynomial order and separate FP32 adds/multiplies match libm; other
-//! lanes use libm itself. No approximate reciprocal, FMA contraction or fast exp.
-// Coefficients/branch formulas derived from libm's FreeBSD s_erff.c port:
-// Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
-// Developed at SunPro, a Sun Microsystems, Inc. business.
-// Permission to use, copy, modify, and distribute this software is freely
-// granted, provided that this notice is preserved.
 use std::arch::x86_64::*;
 
 #[inline]

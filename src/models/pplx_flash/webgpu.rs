@@ -419,14 +419,12 @@ impl Gpu {
         } else if name == "int8_mlp" || name == "q4_mlp" {
             [params[1].div_ceil(64), params[0].div_ceil(64), 1]
         } else if name == "delta_scan_chained" {
-            // 32 state columns per workgroup: 32 heads * 128 columns / 32.
             [128, 1, 1]
         } else if name == "delta_scan_staged" {
             [64, 1, 1]
         } else if (self.cooperative_norm && name == "norm") || name == "norm_cooperative" {
             [params[0], 1, 1]
         } else if self.tiled_attention && name == "scores" {
-            // 32 keys x 32 (query, head) rows per workgroup; one KV head per z.
             [params[0].div_ceil(32), (params[1] * 4).div_ceil(32), 4]
         } else if self.tiled_attention && name == "values" {
             [8, (params[1] * 4).div_ceil(64), 4]
@@ -775,7 +773,6 @@ impl Gpu {
                 &[n],
                 n * 64,
             )?;
-            // Small BF16 decay parameters remain in the same streamed GPU weight format.
             let gates = self.empty(n * 64)?;
             let params = self.empty(64)?;
             self.run(
@@ -852,7 +849,6 @@ impl Gpu {
         let mut quantized_activated = None;
         #[cfg(not(feature = "kernel-checks"))]
         let quantized_activated: Option<Buffer> = None;
-        // Gate, up, SiLU product and down_proj activation quantization in one kernel.
         #[allow(unused_mut)]
         let mut quantized_down: Option<Buffer> = None;
         #[cfg(feature = "kernel-checks")]
@@ -892,7 +888,6 @@ impl Gpu {
             )?;
             quantized_activated = Some(output);
         }
-        // Unfused grouped path: the SiLU product goes straight into down_proj's quantized input.
         #[cfg(feature = "kernel-checks")]
         if int8_mlp.is_some()
             && self.grouped_q4()

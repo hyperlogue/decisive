@@ -31,7 +31,6 @@ pub(super) fn apply_parallel(
             let first = chunk * rows;
             let count = out.len() / w.rows;
             PANEL_WORK.with(|work| {
-                // Never submit nested Rayon work while this TLS panel is borrowed.
                 apply(
                     w,
                     &x[first * w.cols..(first + count) * w.cols],

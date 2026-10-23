@@ -1,0 +1,92 @@
+{
+  "draft": "My name is Alex Rivera. My email is alex@example.com.",
+  "output": {
+    "response": {
+      "model": "decima-small",
+      "answers": {
+        "name": {
+          "type": "noul",
+          "noul": 0.9243,
+          "chunk": {
+            "index": 0,
+            "count": 1,
+            "start": 0,
+            "end": 53
+          }
+        },
+        "personal": {
+          "type": "choice",
+          "choice": "contact",
+          "confidence": 0.7331,
+          "probabilities": {
+            "birthday": 0.0006,
+            "contact": 0.7776,
+            "precise": 0.0321,
+            "identity": 0.0247,
+            "fake": 0.036,
+            "none": 0.1291
+          },
+          "max_probabilities": {
+            "birthday": 0.0006,
+            "contact": 0.7776,
+            "precise": 0.0321,
+            "identity": 0.0247,
+            "fake": 0.036,
+            "none": 0.1291
+          },
+          "chunk": {
+            "index": 0,
+            "count": 1,
+            "start": 0,
+            "end": 53
+          }
+        },
+        "financial": {
+          "type": "noul",
+          "noul": 0.101,
+          "chunk": {
+            "index": 0,
+            "count": 1,
+            "start": 0,
+            "end": 53
+          }
+        },
+        "secret": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.2987,
+          "probabilities": {
+            "password": 0.0673,
+            "token": 0.052,
+            "otp": 0.0348,
+            "privatekey": 0.109,
+            "fake": 0.3214,
+            "none": 0.4156
+          },
+          "max_probabilities": {
+            "password": 0.0673,
+            "token": 0.052,
+            "otp": 0.0348,
+            "privatekey": 0.109,
+            "fake": 0.3214,
+            "none": 0.4156
+          },
+          "chunk": {
+            "index": 0,
+            "count": 1,
+            "start": 0,
+            "end": 53
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 74,
+        "output_tokens": 0,
+        "chunks": 1
+      }
+    },
+    "backend": "webgpu",
+    "model": "Decima Small",
+    "elapsed_ms": 33194
+  }
+}

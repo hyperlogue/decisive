@@ -3,6 +3,7 @@ mod activation_wasm;
 mod cpu;
 mod embedding;
 mod input;
+mod long;
 #[cfg(feature = "int8")]
 mod int8;
 #[cfg(all(feature = "cpu", feature = "int8"))]
@@ -40,7 +41,9 @@ use anyhow::{Result, ensure};
 use cpu::{Linear, Norm};
 pub use input::{Kind, Question};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use std::{collections::VecDeque, sync::Arc};
 use weights::Weights;
 
@@ -208,7 +211,6 @@ struct Scratch {
     heads: Vec<f32>,
 }
 
-// Each worker owns a Session; choice-token keys and model identity bound cache reuse.
 pub struct Model {
     identity: Arc<()>,
     config: Config,
@@ -234,7 +236,6 @@ pub struct Stats {
     pub choice_tokens: u64,
     pub choice_cache_hits: u64,
 }
-// Cache only before state cross-attention; later scorer activations depend on the request.
 struct CachedChoice {
     hidden: Box<[f32]>,
     query: Box<[f32]>,
@@ -293,7 +294,6 @@ impl Session {
             rules.validate(specialization::CpuPlan::validate)?;
         }
         self.rules = rules;
-        // Tiling can change rounding; invalidate cached choices when the plan changes.
         self.clear_cache();
         Ok(())
     }
@@ -326,7 +326,6 @@ impl Model {
         };
         let encoder = std::fs::File::open(root.join("encoder/model.safetensors"))?;
         let head = std::fs::File::open(root.join("head.safetensors"))?;
-        // Checkpoint files must remain immutable until loading finishes.
         let encoder = unsafe { memmap2::Mmap::map(&encoder)? };
         let head = unsafe { memmap2::Mmap::map(&head)? };
         Self::from_bytes(
@@ -356,8 +355,6 @@ impl Model {
             true,
         )
     }
-    // Loads everything but the word embeddings, which the WebGPU model keeps on the GPU; the
-    // encoder checkpoint may omit them. The result must not run on the CPU.
     #[cfg(all(feature = "webgpu", feature = "wasm"))]
     pub(super) fn without_vocabulary(
         config: &[u8],
@@ -557,7 +554,6 @@ impl Model {
         }
         Ok(Arc::from(s.hidden.as_slice()))
     }
-    // Reject state+question above 512 tokens; silent truncation changes the contract.
     pub fn decide(&self, state: &str, q: &Question, s: &mut Session) -> Result<Vec<f32>> {
         #[cfg(feature = "cpu")]
         if rayon::current_thread_index().is_none() {
@@ -782,84 +778,19 @@ impl Model {
                 .collect::<Result<Vec<_>>>()
                 .map(Value::Array);
         }
-        ensure!(request.is_object(), "request must be an object");
-        ensure!(
-            request["long"].is_null(),
-            "Decima long-document chunking is not implemented; maximum state + question is 512 tokens"
-        );
-        let state = &request["state"];
-        ensure!(
-            state.is_string() || state.is_array() || state.is_object(),
-            "state must be a string, object or array"
-        );
-        let state = input::text(state);
-        let lang = request.get("lang").map_or(Ok("en"), |v| {
-            v.as_str()
-                .ok_or_else(|| anyhow::anyhow!("lang must be a string"))
-        })?;
-        let questions = request["questions"]
-            .as_object()
-            .ok_or_else(|| anyhow::anyhow!("questions must be an object"))?;
-        ensure!((1..=256).contains(&questions.len()), "need 1–256 questions");
-        let threshold = request
-            .get("min_confidence")
-            .filter(|v| !v.is_null())
-            .map(|v| {
-                v.as_f64()
-                    .ok_or_else(|| anyhow::anyhow!("min_confidence must be numeric"))
-            })
-            .transpose()?;
-        ensure!(
-            threshold.is_none_or(|v| (0.0..=1.0).contains(&v)),
-            "min_confidence must be in [0,1]"
-        );
-        let mut answers = serde_json::Map::new();
-        let parsed = questions
+        let parsed = long::parse(&self.input, request)?;
+        let scores = parsed
+            .states
             .iter()
-            .map(|(id, spec)| Ok((id, input::parse_question(id, spec, lang)?)))
+            .map(|state| {
+                parsed
+                    .questions
+                    .iter()
+                    .map(|(_, q, _)| self.decide(state, q, s))
+                    .collect::<Result<Vec<_>>>()
+            })
             .collect::<Result<Vec<_>>>()?;
-        let r = |v: f64| (v * 10000.).round_ties_even() / 10000.;
-        for (id, (q, keys)) in parsed {
-            let p = self.decide(&state, &q, s)?;
-            let best = p
-                .iter()
-                .enumerate()
-                .max_by(|(i, a), (j, b)| a.total_cmp(b).then_with(|| j.cmp(i)))
-                .unwrap()
-                .0;
-            let confidence =
-                ((p.len() as f64 * p[best] as f64 - 1.) / (p.len() - 1) as f64).clamp(0., 1.);
-            let probabilities: serde_json::Map<String, Value> = p
-                .iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    (
-                        if q.kind == Kind::Choice {
-                            keys[i].clone()
-                        } else {
-                            i.to_string()
-                        },
-                        json!(r(*v as f64)),
-                    )
-                })
-                .collect();
-            let mut answer = match q.kind {
-                Kind::Choice => {
-                    json!({"type":"choice","choice":keys[best],"confidence":r(confidence),"probabilities":probabilities})
-                }
-                Kind::Score => {
-                    json!({"type":"score","score":r(p.iter().enumerate().map(|(i,v)|i as f64* *v as f64).sum()),"confidence":r(confidence),"legend":keys.iter().enumerate().map(|(i,v)|(i.to_string(),json!(v))).collect::<serde_json::Map<_,_>>(),"probabilities":probabilities})
-                }
-                _ => json!({"type":"noul","noul":r(p[0] as f64)}),
-            };
-            if let Some(t) = threshold {
-                answer["abstain"] = json!(confidence < t);
-            }
-            answers.insert(id.clone(), answer);
-        }
-        Ok(
-            json!({"model":"decima-small","answers":answers,"usage":{"input_tokens":self.input.ids(&state)?.len(),"output_tokens":0}}),
-        )
+        Ok(long::respond(&parsed, &scores))
     }
 }
 
@@ -1052,6 +983,28 @@ mod tests {
             let mut req=json!({"state":"record ".repeat(520),"questions":{"q":{"type":"choice","criteria":["yes","no"]}}});
             assert!(model.predict_json(&req,&mut s).unwrap_err().to_string().contains("STATE_TRUNCATED"));
             req["state"]=json!("hello");req["long"]=json!("chunk");assert!(model.predict_json(&req,&mut s).is_err());
+            req["long"]=Value::Null;req["window"]=json!(16);assert!(model.predict_json(&req,&mut s).unwrap_err().to_string().contains("requires long"));
+            let questions=json!({"pick":{"type":"choice","criteria":{"bug":"a software bug","bill":"a billing problem","none":"neither"}},"flag":{"type":"noul","instructions":"Does the user mention a refund?"}});
+            let plain=json!({"state":{"context":[{"role":"assistant","content":"How can I help?"},{"role":"user","content":"I was charged twice."}]},"questions":questions});
+            let mut long=plain.clone();long["long"]=json!(true);
+            let (a,b)=(model.predict_json(&plain,&mut s)?,model.predict_json(&long,&mut s)?);
+            for id in ["pick","flag"] {
+                let mut answer=b["answers"][id].clone();
+                assert_eq!(answer["chunk"]["count"],1);
+                answer.as_object_mut().unwrap().remove("chunk");
+                if let Some(max)=answer.as_object_mut().unwrap().remove("max_probabilities") {assert_eq!(max,a["answers"][id]["probabilities"]);}
+                assert_eq!(answer,a["answers"][id]);
+            }
+            let filler="I like long walks and strong tea. ".repeat(60);
+            long["state"]["context"][1]["content"]=json!(format!("{filler}Please refund the second charge. {filler}"));
+            let out=model.predict_json(&long,&mut s)?;
+            let chunks=out["usage"]["chunks"].as_u64().unwrap();
+            assert!(chunks>50 && out["usage"]["input_tokens"].as_u64().unwrap()>512,"{out}");
+            let flag=&out["answers"]["flag"];
+            let (start,end)=(flag["chunk"]["start"].as_u64().unwrap() as usize,flag["chunk"]["end"].as_u64().unwrap() as usize);
+            let text=long["state"]["context"][1]["content"].as_str().unwrap().chars().skip(start).take(end-start).collect::<String>();
+            assert!(text.contains("refund"),"strongest chunk: {text}");
+            for (k,v) in out["answers"]["pick"]["max_probabilities"].as_object().unwrap() {assert!(v.as_f64()>=out["answers"]["pick"]["probabilities"][k].as_f64());}
             let fixture: Value = serde_json::from_str(include_str!("../../../benches/decima-reference.jsonl").lines().next().unwrap())?;
             let q = question(&fixture["question"]);
             model.decide(fixture["state"].as_str().unwrap(), &q, &mut s)?;

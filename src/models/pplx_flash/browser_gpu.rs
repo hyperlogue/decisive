@@ -365,8 +365,6 @@ impl BrowserGpu {
         while !self.pending_layers.is_empty() {
             if let Err(error) = self.wait_layer().await { failure = Some(error); }
         }
-        // Preparation or encoding may have failed after submitting conversions.
-        // Drain these too before destroying their uniforms or weight buffers.
         if let Err(error) = self.gpu.wait_idle().await { failure = Some(JsValue::from_str(&error.to_string())); }
         #[cfg(feature = "kernel-checks")]
         if self.resident_layers.is_empty() { self.gpu.clear_checkpoint_weights(); }

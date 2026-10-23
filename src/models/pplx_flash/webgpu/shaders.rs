@@ -284,8 +284,6 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
     for(var i=0u;i<d;i++) { y[row*d+i]=(x[row*d+i]*scale)*(1.0+bf(i)); }
 }
 "#;
-// One workgroup per row: coalesced 512-value tiles in workgroup memory, with one thread
-// summing them in NORM's order so the output matches NORM bit for bit. Requires d % 4 == 0.
 #[cfg(feature = "kernel-checks")]
 pub(super) const NORM_COOPERATIVE: &str = r#"
 var<workgroup> tile:array<vec4<f32>,128>;
@@ -402,10 +400,6 @@ pub(super) fn delta_scan_four() -> String {
             &loop_body(false),
         )
 }
-// Two threads hold halves of each 128-element state column, 32 columns per workgroup. Each
-// serial sum runs over the first half, then continues from the carried partial over the second,
-// so the result matches DELTA_SCAN bit for bit while halving per-thread state. q/k for eight
-// tokens are staged in workgroup memory.
 #[cfg(feature = "kernel-checks")]
 pub(super) const DELTA_SCAN_CHAINED: &str = r#"
 var<workgroup> kq:array<vec4<f32>,512>;
@@ -456,8 +450,6 @@ fn main(@builtin(workgroup_id) wg:vec3<u32>, @builtin(local_invocation_index) l:
     }
 }
 "#;
-// One thread per state column like DELTA_SCAN, with q/k for four tokens staged in workgroup
-// memory; the arithmetic order is DELTA_SCAN's.
 #[cfg(feature = "kernel-checks")]
 pub(super) const DELTA_SCAN_STAGED: &str = r#"
 var<workgroup> kq:array<vec4<f32>,256>;
@@ -564,8 +556,6 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
 }
 "#;
 
-// Tiled attention: rows are (query, head) pairs of one KV head so the four query heads share each K/V tile.
-// Every output keeps the reference kernels' sequential fma order, so results are bitwise identical.
 #[cfg(feature = "kernel-checks")]
 pub(super) const SCORES_TILED: &str = r#"
 var<workgroup> qa:array<vec4<f32>,288>;

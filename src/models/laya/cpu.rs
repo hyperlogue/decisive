@@ -763,7 +763,6 @@ impl Linear {
         }
         let run = |start: usize, dst: &mut [f32]| {
             let m = dst.len() / self.output;
-            // W is [out, in]; checked dimensions and disjoint outputs satisfy sgemm's aliasing contract.
             unsafe {
                 matrixmultiply::sgemm(
                     m,

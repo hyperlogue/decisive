@@ -31,8 +31,6 @@ pub(super) struct Device {
     pub profile: Option<super::profile::Profile>,
     pub batch_passes: Cell<bool>,
     pending: RefCell<Vec<PendingDispatch>>,
-    // Layers repeat the same parameters and mostly the same buffers. Cached uniforms are never
-    // rewritten, so queued layers may share them; reset() drops both caches between chunks.
     cached_uniforms: RefCell<HashMap<[u32; 16], wgpu::Buffer>>,
     cached_bindings: RefCell<HashMap<(wgpu::ComputePipeline, Vec<wgpu::Buffer>, [u32; 16]), wgpu::BindGroup>>,
 }

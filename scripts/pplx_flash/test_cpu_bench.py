@@ -91,8 +91,6 @@ class CpuReports(unittest.TestCase):
                 bad_sets.append(bad)
             repeated = copy.deepcopy(records) + [dict(copy.deepcopy(r), round=1) for r in records]
             self.assertEqual(len(check(repeated)), 4)
-            # A constant logit shift can leave probabilities unchanged; the
-            # numerical audit must still reject nondeterministic repeated logits.
             repeated[2]['metrics']['logits']['answer'] = [.1, 1.1]
             bad_sets.append(repeated)
             for bad in bad_sets:

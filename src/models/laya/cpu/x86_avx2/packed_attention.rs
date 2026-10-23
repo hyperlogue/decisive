@@ -247,7 +247,6 @@ unsafe fn pack_normalized(src: &[f32], rows: usize, k: usize, sums: &[f32], dst:
         }
     }
 }
-// Caller supplies disjoint, sufficiently sized buffers and verifies AVX2.
 #[target_feature(enable = "avx2")]
 pub(super) unsafe fn pack_rows(src: &[f32], rows: usize, k: usize, stride: usize, dst: &mut [f32]) {
     unsafe {

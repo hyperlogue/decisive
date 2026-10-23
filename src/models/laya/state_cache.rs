@@ -1,4 +1,3 @@
-//! Cache first-layer state-to-state attention only; question attention and later layers still run.
 use crate::laya::cpu::{self, AttentionScratch, SoftmaxState};
 use std::sync::{Arc, Weak};
 

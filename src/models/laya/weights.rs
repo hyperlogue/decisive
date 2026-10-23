@@ -163,7 +163,6 @@ impl<'a> Weights<'a> {
     #[cfg(feature = "cpu")]
     pub fn open(path: &std::path::Path) -> Result<Self> {
         let file = std::fs::File::open(path)?;
-        // The caller must not modify/truncate the checkpoint during loading.
         let mapped = unsafe { memmap2::Mmap::map(&file)? };
         let (n, metadata) = SafeTensors::read_metadata(&mapped)?;
         drop(mapped);

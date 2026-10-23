@@ -255,7 +255,6 @@ pub async fn run() -> Result<Value> {
         &expected,
         "Q RMS + partial RoPE at selected positions",
     )?);
-    // A non-contiguous pair of decision rows must still see every key/value row.
     let n = 19;
     let positions = [2, 18];
     let query = values(2 * 4096, 9);

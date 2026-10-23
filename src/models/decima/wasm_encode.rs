@@ -1,11 +1,9 @@
-//! Batched sequences share projections, but keep separate positions and attention.
 #[cfg(feature = "int8")]
 use super::cpu::Linear;
 use super::{D, Model, Scratch, cpu, specialization::CpuPlan};
 use anyhow::{Result, ensure};
 use std::sync::Arc;
 
-// Request-owned: nested attention work can reenter a worker while it waits.
 #[cfg(feature = "decima-wasm-threads")]
 #[derive(Default)]
 pub(super) struct AttentionScratch {

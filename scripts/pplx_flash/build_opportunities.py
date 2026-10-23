@@ -1,8 +1,3 @@
-"""Embed the production Pplx WebGPU shaders in the opportunities benchmark page.
-
-The shaders are produced by the Rust builders in src/models/pplx_flash/webgpu,
-compiled here as a tiny standalone program so the page uses identical WGSL.
-"""
 import json
 from pathlib import Path
 import re
@@ -38,7 +33,6 @@ fn main() {
 
 def shaders():
     grouped = (SOURCE / 'grouped_q4.rs').read_text()
-    # Keep the pure WGSL builders; the GPU check below them needs the full crate.
     grouped = grouped[grouped.index('pub(super) fn quantize'):grouped.index('pub(crate) async fn check')]
     with tempfile.TemporaryDirectory() as directory:
         directory = Path(directory)

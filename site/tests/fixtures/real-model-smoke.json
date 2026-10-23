@@ -1,0 +1,279 @@
+{
+  "model": "perplexity-ai/pplx-decider-flash-v1.2",
+  "revision": "6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d",
+  "runtime": "unchanged Decisive WASM SIMD, CPU",
+  "results": [
+    {
+      "draft": "My name is Alex Rivera. My email is alex@example.com.",
+      "scores": [
+        {
+          "id": "name",
+          "icon": "person",
+          "severity": "mild",
+          "question": "a real personal name",
+          "score": 0.9822228982299452,
+          "detected": true
+        },
+        {
+          "id": "birthday",
+          "icon": "calendar",
+          "severity": "mild",
+          "question": "a birthday or date of birth",
+          "score": 0.00702472201236484,
+          "detected": false
+        },
+        {
+          "id": "email",
+          "icon": "mail",
+          "severity": "mild",
+          "question": "a personal email address",
+          "score": 0.9917535892697452,
+          "detected": true
+        },
+        {
+          "id": "phone",
+          "icon": "phone",
+          "severity": "mild",
+          "question": "a personal phone number",
+          "score": 0.23760236445661836,
+          "detected": false
+        },
+        {
+          "id": "location",
+          "icon": "pin",
+          "severity": "mild",
+          "question": "a person’s city, region, country, or travel location",
+          "score": 0.0865347317348028,
+          "detected": false
+        },
+        {
+          "id": "precise",
+          "icon": "home",
+          "severity": "strong",
+          "question": "a home address, precise coordinates, or exact current location",
+          "score": 0.12162103886541609,
+          "detected": false
+        },
+        {
+          "id": "credentials",
+          "icon": "key",
+          "severity": "strong",
+          "question": "a password, access token, API key, or other authentication secret",
+          "score": 0.09291933737370847,
+          "detected": false
+        },
+        {
+          "id": "health",
+          "icon": "heart",
+          "severity": "strong",
+          "question": "a person’s medical condition, treatment, mental health, or health history",
+          "score": 0.05843607820111164,
+          "detected": false
+        },
+        {
+          "id": "financial",
+          "icon": "credit",
+          "severity": "strong",
+          "question": "personal bank, card, account, income, debt, or other financial details",
+          "score": 0.16738459966732858,
+          "detected": false
+        },
+        {
+          "id": "identity",
+          "icon": "id",
+          "severity": "strong",
+          "question": "a government identification number or document details",
+          "score": 0.3027854354019593,
+          "detected": false
+        }
+      ],
+      "response": {
+        "answers": {
+          "name": {
+            "type": "noul",
+            "noul": 0.9822228982299452
+          },
+          "birthday": {
+            "type": "noul",
+            "noul": 0.00702472201236484
+          },
+          "email": {
+            "type": "noul",
+            "noul": 0.9917535892697452
+          },
+          "phone": {
+            "type": "noul",
+            "noul": 0.23760236445661836
+          },
+          "location": {
+            "type": "noul",
+            "noul": 0.0865347317348028
+          },
+          "precise": {
+            "type": "noul",
+            "noul": 0.12162103886541609
+          },
+          "credentials": {
+            "type": "noul",
+            "noul": 0.09291933737370847
+          },
+          "health": {
+            "type": "noul",
+            "noul": 0.05843607820111164
+          },
+          "financial": {
+            "type": "noul",
+            "noul": 0.16738459966732858
+          },
+          "identity": {
+            "type": "noul",
+            "noul": 0.3027854354019593
+          }
+        },
+        "usage": {
+          "input_tokens": 550,
+          "output_tokens": 0,
+          "sequences": 1
+        }
+      },
+      "elapsed_ms": 226201.0999994278,
+      "backend": "wasm"
+    },
+    {
+      "draft": "我住在北京。我有糖尿病。",
+      "scores": [
+        {
+          "id": "name",
+          "icon": "person",
+          "severity": "mild",
+          "question": "a real personal name",
+          "score": 0.005083469995254804,
+          "detected": false
+        },
+        {
+          "id": "birthday",
+          "icon": "calendar",
+          "severity": "mild",
+          "question": "a birthday or date of birth",
+          "score": 0.0072622377487694045,
+          "detected": false
+        },
+        {
+          "id": "email",
+          "icon": "mail",
+          "severity": "mild",
+          "question": "a personal email address",
+          "score": 0.011589526209597967,
+          "detected": false
+        },
+        {
+          "id": "phone",
+          "icon": "phone",
+          "severity": "mild",
+          "question": "a personal phone number",
+          "score": 0.024164967796236152,
+          "detected": false
+        },
+        {
+          "id": "location",
+          "icon": "pin",
+          "severity": "mild",
+          "question": "a person’s city, region, country, or travel location",
+          "score": 0.5786423259568908,
+          "detected": true
+        },
+        {
+          "id": "precise",
+          "icon": "home",
+          "severity": "strong",
+          "question": "a home address, precise coordinates, or exact current location",
+          "score": 0.4679953614474725,
+          "detected": false
+        },
+        {
+          "id": "credentials",
+          "icon": "key",
+          "severity": "strong",
+          "question": "a password, access token, API key, or other authentication secret",
+          "score": 0.011834564800606661,
+          "detected": false
+        },
+        {
+          "id": "health",
+          "icon": "heart",
+          "severity": "strong",
+          "question": "a person’s medical condition, treatment, mental health, or health history",
+          "score": 0.9711770233500525,
+          "detected": true
+        },
+        {
+          "id": "financial",
+          "icon": "credit",
+          "severity": "strong",
+          "question": "personal bank, card, account, income, debt, or other financial details",
+          "score": 0.01216546492764348,
+          "detected": false
+        },
+        {
+          "id": "identity",
+          "icon": "id",
+          "severity": "strong",
+          "question": "a government identification number or document details",
+          "score": 0.008075669287507694,
+          "detected": false
+        }
+      ],
+      "response": {
+        "answers": {
+          "name": {
+            "type": "noul",
+            "noul": 0.005083469995254804
+          },
+          "birthday": {
+            "type": "noul",
+            "noul": 0.0072622377487694045
+          },
+          "email": {
+            "type": "noul",
+            "noul": 0.011589526209597967
+          },
+          "phone": {
+            "type": "noul",
+            "noul": 0.024164967796236152
+          },
+          "location": {
+            "type": "noul",
+            "noul": 0.5786423259568908
+          },
+          "precise": {
+            "type": "noul",
+            "noul": 0.4679953614474725
+          },
+          "credentials": {
+            "type": "noul",
+            "noul": 0.011834564800606661
+          },
+          "health": {
+            "type": "noul",
+            "noul": 0.9711770233500525
+          },
+          "financial": {
+            "type": "noul",
+            "noul": 0.01216546492764348
+          },
+          "identity": {
+            "type": "noul",
+            "noul": 0.008075669287507694
+          }
+        },
+        "usage": {
+          "input_tokens": 545,
+          "output_tokens": 0,
+          "sequences": 1
+        }
+      },
+      "elapsed_ms": 217814.19999980927,
+      "backend": "wasm"
+    }
+  ]
+}

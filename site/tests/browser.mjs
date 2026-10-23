@@ -1,0 +1,183 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const screenshots=process.env.PRIVACY_SCREENSHOTS || '/tmp/decisive-privacy-qa';
+await fs.mkdir(screenshots,{recursive:true});
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+const browser=await chromium.launch({executablePath:process.env.PRIVACY_BROWSER_EXECUTABLE,headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--enable-unsafe-webgpu','--use-angle=swiftshader']});
+const base=process.env.PRIVACY_TEST_URL || 'http://127.0.0.1:8768/site/dist/';
+try{
+ const context=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:1});
+ const page=await context.newPage(),errors=[],requests=[];
+ page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>requests.push(r.url()));
+ await page.goto(base);await page.waitForSelector('#setup-dialog[open]');
+ assert.equal(await page.locator('#cap-gpu').textContent(),'Available');
+ assert.equal(await page.locator('#backend, #browser-capabilities, .compatibility-details').count(),0);
+ assert.match(await page.locator('#setup-dialog').textContent(),/This page requires WebGPU to work/);
+ assert.match(await page.locator('#setup-size').textContent(),/506.7 MB/);
+ await page.screenshot({path:path.join(screenshots,'setup-mobile.png')});
+ await page.click('#skip-setup');await page.fill('#message-input','Private test text: alex@example.com');
+ assert.equal(await page.locator('#enable-analysis').count(),0);
+ assert.match(await page.locator('#page-description').innerText(),/Decisive.*WebGPU/);
+ assert.equal(await page.evaluate(()=>{
+   const box=id=>document.getElementById(id).getBoundingClientRect();
+   return Math.abs(box('draft-region').top-box('site-header').bottom)<1&&
+     Math.abs(box('analysis-scroll').top-box('draft-region').bottom)<1&&
+     Math.abs(box('analysis-scroll').bottom-innerHeight)<1;
+ }),true,'draft below header and analysis fills remaining height');
+ assert.equal(await page.locator('#share-result').isDisabled(),true);
+ for(const locale of ['en','es','zh','ar']){
+   await page.selectOption('#language-picker',locale);
+   assert.equal(await page.evaluate(()=>document.documentElement.dir),locale==='ar'?'rtl':'ltr');
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ }
+ await page.screenshot({path:path.join(screenshots,'editor-ar.png')});
+ await page.selectOption('#language-picker','en');await page.click('#open-setup');await page.click('#manage-models');
+ await page.waitForSelector('#models-dialog[open]');
+ assert.equal(await page.locator('#model-files li').count(),7);
+ assert.equal(await page.locator('#delete-model').isDisabled(),true);
+ await page.screenshot({path:path.join(screenshots,'models-mobile.png')});
+ await page.selectOption('#storage-model','pplx-flash-q4');
+ await page.waitForFunction(()=>document.querySelector('#model-name').textContent==='Pplx Flash · Q4');
+ assert.equal(await page.locator('#model-badge').textContent(),'Not downloaded');
+ assert.equal(await page.locator('#download-model').isVisible(),true);
+ assert.equal(await page.locator('#download-model').isDisabled(),true);
+ assert.equal(await page.locator('#use-model').isVisible(),false);
+ assert.equal(await page.locator('#model-source').isVisible(),true);
+ assert.equal(await page.locator('#model-total').textContent(),'2.39 GB');
+ assert.equal(await page.locator('#model-files li').count(),42);
+ assert.match(await page.locator('#model-error').innerText(),/shader-f16/);
+ await page.screenshot({path:path.join(screenshots,'q4-precision-required.png')});
+ const blockedQ4=await page.evaluate(()=>new Promise(resolve=>{
+   const worker=new Worker(new URL('workers/model-worker.js',location.href),{type:'module'});
+   worker.onmessage=({data})=>{worker.terminate();resolve(data.error);};
+   worker.postMessage({id:1,method:'download',args:{modelId:'pplx-flash-q4'}});
+ }));
+ assert.equal(blockedQ4,'gpuPrecisionRequired');
+ await page.selectOption('#storage-model','decima-small');
+ await page.waitForFunction(()=>document.querySelector('#model-name').textContent==='Decima Small');
+
+ assert.equal(await page.evaluate(()=>location.hash),'');
+ await page.locator('.models-body').evaluate(el=>el.scrollTop=el.scrollHeight);
+ assert.equal(await page.locator('#close-models').evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),true);
+ await page.click('#close-models');assert.equal(await page.locator('#message-input').inputValue(),'Private test text: alex@example.com');
+ assert.equal(await page.locator('#open-setup').evaluate(el=>el===document.activeElement),true);
+ await page.click('#open-setup');await page.click('#manage-models');await page.keyboard.press('Escape');
+ assert.equal(await page.locator('#models-dialog').getAttribute('open'),null);
+ assert.ok(requests.every(url=>new URL(url).origin===new URL(base).origin),'typing must not upload or fetch external data');
+ await page.evaluate(()=>navigator.serviceWorker.ready);await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
+ await context.setOffline(true);await page.reload();await page.waitForSelector('#setup-dialog[open]');await page.click('#manage-models');await page.waitForSelector('#model-files li');
+ assert.match(await page.locator('#model-total').textContent(),/506.7 MB/);
+ await context.setOffline(false);
+ assert.deepEqual(errors,[]);await context.close();
+ console.log('Mobile, locales, initial compatibility, no uploads, offline shell: PASS');
+
+ const fixtures={'config.json':Buffer.from('{"fixture":true}'),'weights.bin':Buffer.from('small fixture for real browser OPFS and SHA256 verification')};
+ const manifest={id:'decima-small',name:'Decima Small',engine:'decima',available:true,storeName:'decisive-privacy-decima-small-v1',repository:'example/privacy-test',revision:'test-revision',files:Object.fromEntries(Object.entries(fixtures).map(([name,body])=>[name,{bytes:body.length,sha256:createHash('sha256').update(body).digest('hex')}]))};
+ const c=await browser.newContext({viewport:{width:1100,height:850},serviceWorkers:'block'});
+ const catalog=JSON.parse(await fs.readFile(new URL('../models.json',import.meta.url)));
+ await c.route('**/models.json',r=>r.fulfill({json:{...catalog,models:[manifest,...catalog.models.filter(m=>m.id!==manifest.id)]}}));
+ await c.route('https://huggingface.co/example/privacy-test/**',async r=>{await new Promise(resolve=>setTimeout(resolve,250));await r.fulfill({status:200,body:fixtures[r.request().url().split('/').at(-1)],headers:{'access-control-allow-origin':'*'}});});
+ const p=await c.newPage();p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>console.log('CONSOLE',m.type(),m.text()));
+ await p.goto(base);await p.waitForSelector('#setup-dialog[open]');await p.click('#manage-models');await p.click('#download-model');
+ await p.waitForSelector('#pause-download:not([hidden])');await p.click('#close-models');
+ assert.equal(await p.locator('#models-dialog').getAttribute('open'),null);
+ await p.waitForFunction(()=>document.querySelector('#model-badge').textContent==='Ready',null,{timeout:30000}).catch(async e=>{console.log('DOWNLOAD STATE',await p.locator('#models-dialog').innerText());throw e;});
+ await p.click('#open-setup');await p.click('#manage-models');
+ assert.equal(await p.locator('.file-verified').count(),2);
+ assert.equal(await p.locator('#delete-model').isEnabled(),true);
+ await p.reload();await p.waitForSelector('#setup-dialog[open]');await p.click('#manage-models');await p.waitForSelector('#use-model:not([hidden])');
+ await p.screenshot({path:path.join(screenshots,'models-desktop.png')});
+ assert.equal(await p.locator('.file-verified').count(),2);
+ await p.evaluate(async()=>{
+   const root=await navigator.storage.getDirectory();const dir=await root.getDirectoryHandle('decisive-privacy-pplx-v1',{create:true});
+   const writer=await (await dir.getFileHandle('old-weights.bin',{create:true})).createWritable();await writer.write(new Uint8Array(100));await writer.close();
+ });
+ await p.click('#close-models');await p.click('#open-setup');await p.click('#manage-models');
+ await p.waitForSelector('#legacy-model:not([hidden])');
+ await p.click('#delete-legacy');await p.click('#confirm-delete');
+ await p.waitForSelector('#legacy-model[hidden]',{state:'attached'});
+ assert.equal(await p.locator('.file-verified').count(),2);
+ const other=await c.newPage();await other.goto(base);await other.waitForSelector('#setup-dialog[open]');
+ await other.evaluate(()=>{window.held=false;navigator.locks.request('decisive-privacy-model-files',{mode:'shared'},()=>new Promise(resolve=>{window.release=resolve;window.held=true;}));});
+ await other.waitForFunction(()=>window.held);
+ await p.click('#delete-model');await p.click('#confirm-delete');await p.waitForFunction(()=>!document.querySelector('#model-error').hidden);
+ assert.match(await p.locator('#model-error').textContent(),/Another tab/);assert.equal(await p.locator('.file-verified').count(),2);
+ await other.evaluate(()=>window.release());await other.close();
+ await p.click('#delete-model');await p.click('#confirm-delete');await p.waitForFunction(()=>document.querySelector('#model-badge').textContent==='Not downloaded');
+ assert.equal(await p.locator('#delete-model').isDisabled(),true);
+ assert.deepEqual(errors,[]);await c.close();
+ console.log('Real WASM hashing, browser OPFS persistence, cross-tab lock, scoped deletion: PASS');
+
+ const recorded=JSON.parse(await fs.readFile(new URL('./fixtures/english-result.json',import.meta.url)));
+ const productionCatalog=await fetch(new URL('models.json',base)).then(r=>r.json());
+ const productionManifest=productionCatalog.models.find(m=>m.id===productionCatalog.default);
+ const files=Object.entries(productionManifest.files).map(([name,f])=>({name,expected:f.bytes,bytes:f.bytes,verified:true,state:'verified'}));
+ const total=files.reduce((n,f)=>n+f.bytes,0);
+ const state={modelId:productionManifest.id,revision:productionManifest.revision,files,total,stored:total,verified:total,remaining:0,ready:true,legacyStored:0};
+ const recordedWorker=`const state=${JSON.stringify(state)}, output=${JSON.stringify(recorded.output)};
+ self.onmessage=({data:{id,method,args}})=>{
+   if(method==='load' && args?.backend && args.backend!=='webgpu'){self.postMessage({id,error:'webgpuRequired'});return;}
+   const result=method==='inspect'?state:method==='capabilities'?{sync:true,gpu:true}:method==='predict'?output:{};
+   setTimeout(()=>self.postMessage({id,result}),method==='predict'?600:0);
+ };`;
+ const ui=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
+ await ui.route('**/workers/model-worker.js',r=>r.fulfill({contentType:'text/javascript',body:recordedWorker}));
+ const view=await ui.newPage();view.on('pageerror',e=>errors.push(e.message));
+ await view.goto(base);await view.waitForSelector('#setup-dialog[open]');await view.click('#start-analysis');
+ await view.fill('#message-input',recorded.draft);await view.waitForSelector('#signal-name');
+ assert.equal(await view.locator('.signal-card').count(),Object.values(recorded.output.response.answers).flatMap(a=>a.type==='noul'?[a.noul]:Object.entries(a.max_probabilities??a.probabilities).filter(([k])=>!['fake','none'].includes(k)).map(([,p])=>p)).filter(p=>p>=0.5).length);
+ assert.equal(await view.locator('#runtime-tokens').innerText(),'74');
+ assert.equal(await view.locator('#runtime-time').innerText(),'33.19 s');
+ const analysisBox=await view.locator('#analysis-scroll').boundingBox();
+ const draftBox=await view.locator('#draft-region').boundingBox();
+ await view.click('#signal-name');assert.equal(await view.locator('#analysis-details').getAttribute('open'),'');
+ await view.locator('#analysis-scroll').evaluate(el=>el.scrollTop=el.scrollHeight);
+ assert.deepEqual(await view.locator('#analysis-scroll').boundingBox(),analysisBox,'analysis viewport stays fixed as details expand');
+ assert.deepEqual(await view.locator('#draft-region').boundingBox(),draftBox,'analysis scrolling does not move draft');
+ assert.equal(JSON.parse(await view.locator('#raw-output').textContent()).output.answers.name.noul,recorded.output.response.answers.name.noul);
+ await view.screenshot({path:path.join(screenshots,'analysis-mobile.png')});
+ await view.fill('#message-input','draft changing');assert.equal(await view.locator('.signal-card').count(),0);
+ assert.equal(await view.locator('#runtime-tokens').innerText(),'—');
+ assert.equal(await view.locator('#runtime-time').innerText(),'—');
+ assert.equal(await view.locator('#share-result').isDisabled(),true);
+ await view.fill('#message-input',recorded.draft);await view.waitForSelector('#signal-contact');
+ for(const locale of ['en','zh','ar']){
+   await view.selectOption('#language-picker',locale);await view.click('#share-result');
+   await view.waitForSelector('#share-dialog[open]');
+   assert.equal(await view.locator('#share-image').evaluate(img=>img.naturalWidth),1080);
+   await view.screenshot({path:path.join(screenshots,`share-${locale}.png`)});
+   const saved=view.waitForEvent('download');await view.click('#download-image');
+   const download=await saved;assert.equal(download.suggestedFilename(),'privacy-analysis.png');
+   await view.click('#close-share');
+ }
+ await view.setViewportSize({width:320,height:480});
+ assert.equal(await view.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ assert.equal(await view.locator('#message-input').isVisible(),true);
+ await view.emulateMedia({reducedMotion:'reduce'});
+ await view.fill('#message-input','A new draft');
+ await view.waitForSelector('#signal-name');
+ assert.equal(await view.locator('#live-analysis').evaluate(el=>el.getAnimations({subtree:true}).length),0);
+ assert.deepEqual(errors,[]);await ui.close();
+ console.log('Recorded real output: icons, details, draft invalidation, English/Chinese/Arabic PNG export: PASS');
+
+ const unavailable=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
+ await unavailable.route('**/lib/webgpu.js',r=>r.fulfill({contentType:'text/javascript',body:'export async function checkWebGPU(){return false;}'}));
+ const blocked=await unavailable.newPage();blocked.on('pageerror',e=>errors.push(e.message));
+ await blocked.goto(base);await blocked.waitForSelector('#setup-dialog[open]');
+ assert.equal(await blocked.locator('#cap-gpu').textContent(),'Not available');
+ assert.equal(await blocked.locator('#start-analysis').isDisabled(),true);
+ assert.match(await blocked.locator('#setup-error').textContent(),/WebGPU is not available/);
+ await blocked.screenshot({path:path.join(screenshots,'webgpu-unavailable.png')});
+ await blocked.click('#manage-models');assert.equal(await blocked.locator('#download-model').isDisabled(),true);
+ const refusal=await blocked.evaluate(()=>new Promise(resolve=>{
+   const worker=new Worker(new URL('workers/model-worker.js',location.href),{type:'module'});
+   worker.onmessage=({data})=>{worker.terminate();resolve(data.error);};
+   worker.postMessage({id:1,method:'load',args:{backend:'wasm'}});
+ }));
+ assert.equal(refusal,'webgpuRequired');
+ await unavailable.close();
+ console.log('WebGPU unavailable blocks download/analysis; CPU requests rejected: PASS');
+
+}finally{await browser.close();}

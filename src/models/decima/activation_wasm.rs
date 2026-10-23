@@ -1,33 +1,3 @@
-//! Decima-local SIMD128 erf-based GELU. Adapted from RTen 0.27.0's
-//! rten-vecmath/src/{erf,exp}.rs, revision
-//! bc1b852cb0ef70a6e8616e884c026f3ce3577c4f, under its MIT option.
-//! Modifications: direct Wasm intrinsics, unfused arithmetic, saturated erf
-//! inputs and model-local bounds. This approximates erf, not tanh GELU.
-// Copyright (c) 2026 RTen project contributors.
-//
-// Permission is hereby granted, free of charge, to any
-// person obtaining a copy of this software and associated
-// documentation files (the "Software"), to deal in the
-// Software without restriction, including without
-// limitation the rights to use, copy, modify, merge,
-// publish, distribute, sublicense, and/or sell copies of
-// the Software, and to permit persons to whom the Software
-// is furnished to do so, subject to the following
-// conditions:
-//
-// The above copyright notice and this permission notice
-// shall be included in all copies or substantial portions
-// of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-// ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-// TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-// PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-// SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-// IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-// DEALINGS IN THE SOFTWARE.
 use core::arch::wasm32::*;
 
 #[inline]
@@ -35,7 +5,6 @@ fn scalar(x: f32) -> f32 {
     0.5 * x * (1. + libm::erff(x * std::f32::consts::FRAC_1_SQRT_2))
 }
 
-// Requires -x² in [-36, 0]; no overflow or subnormal path.
 #[inline]
 fn gaussian_exp(x: v128) -> v128 {
     let magic = f32x4_splat(12582912.);
@@ -65,7 +34,6 @@ fn four(gate: &[f32]) -> v128 {
     unsafe {
         let g = v128_load(gate.as_ptr().cast());
         let x = f32x4_mul(g, f32x4_splat(std::f32::consts::FRAC_1_SQRT_2));
-        // erf rounds to ±1 here; saturate before squaring to avoid overflow.
         let a = f32x4_min(f32x4_abs(x), f32x4_splat(6.));
         let t = f32x4_div(
             f32x4_splat(1.),

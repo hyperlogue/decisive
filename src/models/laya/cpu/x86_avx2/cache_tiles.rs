@@ -28,7 +28,6 @@ pub(crate) fn multiply<const HALF: bool>(
         .for_each(|job| {
             let row = job / column_blocks * row_block;
             let panel = job % column_blocks * panel_block;
-            // Each task owns a disjoint row/column rectangle.
             unsafe {
                 block::<HALF>(
                     a.as_ptr().add(row * k),

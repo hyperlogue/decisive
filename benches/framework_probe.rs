@@ -122,7 +122,6 @@ pub(crate) fn loaded_library_hashes(pid: u32) -> Result<Value> {
     let maps = fs::read_to_string(format!("/proc/{pid}/maps"))?;
     let mut paths = BTreeSet::new();
     for line in maps.lines() {
-        // Skip five metadata fields; never publish local paths or process IDs.
         let mut tail = line;
         for _ in 0..5 {
             tail = tail.trim_start();
