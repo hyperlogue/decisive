@@ -56,3 +56,5 @@ pub fn wasm_kernel_checks() -> Result<String, wasm_bindgen::JsValue> {
 #[cfg(feature = "pplx-flash")]
 #[path = "models/pplx_flash/mod.rs"]
 pub mod pplx_flash;
+
+pub mod inference;

@@ -44,7 +44,7 @@ pub(super) fn fp16_gemm() -> String {
     format!("enable f16;\n{header}\n{gemm}")
 }
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) fn fp16_gemm_tiled(m: usize, n: usize, unroll: bool) -> String {
     let shader = fp16_gemm();
     let start = shader
@@ -95,7 +95,7 @@ pub(super) fn fp16_gemm_tiled(m: usize, n: usize, unroll: bool) -> String {
     shader
 }
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) fn fp16_mlp(m: usize, n: usize) -> String {
     let mut shader = fp16_gemm_tiled(m, n, false)
         .replace("aux: array<u32>", "aux: array<f16>")
@@ -127,7 +127,7 @@ pub(super) fn fp16_mlp(m: usize, n: usize) -> String {
     shader
 }
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) fn fp16_padded(shader: String, n: usize) -> String {
     let mut shader = shader;
     for name in ["bt", "ut"] {
@@ -147,7 +147,7 @@ pub(super) fn fp16_padded(shader: String, n: usize) -> String {
     )
 }
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) fn fp16_gemm_k64(tile: usize) -> String {
     let (m, n) = (tile, tile);
     let mut shader = fp16_gemm_tiled(m, n, false);
@@ -177,7 +177,7 @@ pub(super) fn fp16_gemm_k64(tile: usize) -> String {
     shader
 }
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) fn fp16_gemm_subtile(tile: usize, load_k: usize) -> String {
     assert!([8, 16].contains(&load_k));
     let original = fp16_gemm_tiled(tile, tile, false);
@@ -228,7 +228,7 @@ fn main(@builtin(workgroup_id) g:vec3<u32>, @builtin(local_invocation_id) l:vec3
     )
 }
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) fn fp16_pack_input() -> String {
     format!(
         "enable f16;\n{}\n{}",
@@ -284,7 +284,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
     for(var i=0u;i<d;i++) { y[row*d+i]=(x[row*d+i]*scale)*(1.0+bf(i)); }
 }
 "#;
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) const NORM_COOPERATIVE: &str = r#"
 var<workgroup> tile:array<vec4<f32>,128>;
 var<workgroup> row_scale:f32;
@@ -370,7 +370,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
     }
 }
 "#;
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) fn delta_scan_four() -> String {
     let width = 4;
     let loop_body = |memory: bool| {
@@ -400,7 +400,7 @@ pub(super) fn delta_scan_four() -> String {
             &loop_body(false),
         )
 }
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) const DELTA_SCAN_CHAINED: &str = r#"
 var<workgroup> kq:array<vec4<f32>,512>;
 var<workgroup> gb:array<f32,16>;
@@ -450,7 +450,7 @@ fn main(@builtin(workgroup_id) wg:vec3<u32>, @builtin(local_invocation_index) l:
     }
 }
 "#;
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) const DELTA_SCAN_STAGED: &str = r#"
 var<workgroup> kq:array<vec4<f32>,256>;
 var<workgroup> gb:array<f32,8>;
@@ -556,7 +556,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
 }
 "#;
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) const SCORES_TILED: &str = r#"
 var<workgroup> qa:array<vec4<f32>,288>;
 var<workgroup> kb:array<vec4<f32>,288>;
@@ -606,7 +606,7 @@ fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_id) l:vec3<
 }
 "#;
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) const VALUES_TILED: &str = r#"
 var<workgroup> pa:array<vec4<f32>,320>;
 var<workgroup> vb:array<vec4<f32>,128>;

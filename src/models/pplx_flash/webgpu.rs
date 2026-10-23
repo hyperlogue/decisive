@@ -1,16 +1,16 @@
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 mod checkpoint;
 #[cfg(feature = "kernel-checks")]
 pub(super) mod checks;
 mod device;
-pub(super) mod streaming;
+pub(crate) mod streaming;
 #[cfg(feature = "kernel-checks")]
 mod streaming_check;
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 mod int8;
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) mod q4;
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 pub(super) mod grouped_q4;
 mod profile;
 mod shaders;
@@ -33,9 +33,9 @@ pub(super) struct Tensor {
 pub(super) struct QueuedLayer {
     completion: device::Completion,
     scratch: Vec<Buffer>,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     quantized: Vec<(Buffer, Buffer)>,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     q4_expansion: Option<Buffer>,
 }
 pub(super) struct Gpu {
@@ -68,24 +68,24 @@ pub(super) struct Gpu {
     fused_mlp: bool,
     // The selected int8_gemm kernel's [rows, columns] tile, when it replaced the tuned one.
     int8_gemm_tile: Option<[u32; 2]>,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     int8: Option<int8::State>,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     reuse_weight_buffers: bool,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     weight_buffers: RefCell<Vec<Buffer>>,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     q4: Option<q4::Mode>,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     q4_expansion: Option<Buffer>,
 }
 impl Gpu {
     pub(crate) fn grouped_q4(&self) -> bool {
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         {
             matches!(self.q4, Some(q4::Mode::Group64 | q4::Mode::Group64Signed))
         }
-        #[cfg(not(feature = "kernel-checks"))]
+        #[cfg(not(any(feature = "kernel-checks", feature = "pplx-webgpu")))]
         {
             false
         }
@@ -210,15 +210,15 @@ impl Gpu {
             mlp_selection: serde_json::Value::Null,
             fused_mlp: true,
             int8_gemm_tile: None,
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             int8: None,
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             reuse_weight_buffers: false,
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             weight_buffers: RefCell::new(Vec::new()),
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             q4: None,
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             q4_expansion: None,
         })
     }
@@ -229,7 +229,7 @@ impl Gpu {
         } else {
             "bf16-storage-f32-compute"
         };
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let projection_precision = match &self.int8 {
             Some(state) if self.grouped_q4() && state.float_partials => "w4a8-fp32-group-dots",
             Some(_) if self.grouped_q4() => "w4a8-packed-int32-group-dots",
@@ -282,16 +282,16 @@ impl Gpu {
         self.rows = 0;
     }
     pub fn upload(&self, bytes: &[u8], shape: Vec<usize>) -> Result<Tensor> {
-        #[cfg(not(feature = "kernel-checks"))]
+        #[cfg(not(any(feature = "kernel-checks", feature = "pplx-webgpu")))]
         let buffer = self.device.bytes(bytes, "BF16 weight")?;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let buffer = if let Some(buffer) = self.reused_weight_buffer(bytes.len()) {
             self.device.queue.write_buffer(&buffer, 0, bytes);
             buffer
         } else {
             self.device.bytes(bytes, "BF16 weight")?
         };
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let buffer = if self.fp16_projections && shape.len() == 2 && !self.grouped_q4() {
             let converted = self.checkpoint_fp16(&buffer, bytes.len())?;
             if self.reuse_weight_buffers {
@@ -398,7 +398,7 @@ impl Gpu {
             *p = u32::try_from(v)?;
         }
         let int8_tile = [64, 64];
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let int8_tile = self.int8.as_ref().map_or(int8_tile, |s| s.tile);
         let groups = if (name == "int8_input" || name == "int8_silu_input") && self.grouped_q4() {
             [params[0], params[2].div_ceil(256), 1]
@@ -464,7 +464,7 @@ impl Gpu {
         output: usize,
     ) -> Result<Buffer> {
         let y = self.empty(n * output)?;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.grouped_q4() {
             let input_buffer = self.int8_input(e, x, n, input)?;
             // The 64x64 tile leaves the 32-wide recurrent projections few workgroups.
@@ -472,7 +472,7 @@ impl Gpu {
             self.run(e, name, [&input_buffer, w, &self.dummy, &y], &[n, output, input], 0)?;
             return Ok(y);
         }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if let Some(weight) = self
             .int8
             .as_ref()
@@ -494,7 +494,7 @@ impl Gpu {
             )?;
             return Ok(y);
         }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         ensure!(
             !self.int8.as_ref().is_some_and(|s| s.pure),
             "pure INT8 projection is missing quantized weights"
@@ -532,7 +532,7 @@ impl Gpu {
         )?;
         Ok(y)
     }
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     pub async fn layer(
         &mut self,
         tensors: &HashMap<String, Tensor>,
@@ -570,18 +570,18 @@ impl Gpu {
         let scratch = self.advance_layer(output, rows);
         QueuedLayer {
             completion, scratch,
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             quantized: self.int8.as_mut().map(|s| std::mem::take(&mut s.weights)).unwrap_or_default(),
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             q4_expansion: self.q4_expansion.take(),
         }
     }
     pub async fn collect_layer(&mut self, layer: QueuedLayer) -> Result<()> {
         let result = layer.completion.wait().await;
         for buffer in layer.scratch { self.release_scratch(buffer); }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if let Some(state) = &self.int8 { state.recycle(layer.quantized); }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if let Some(buffer) = layer.q4_expansion {
             if self.q4_expansion.is_none() { self.q4_expansion = Some(buffer); }
             else { buffer.destroy(); }
@@ -838,20 +838,20 @@ impl Gpu {
             get("post_attention_layernorm.weight", &[D])?,
             nq,
         )?;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let int8_mlp = self
             .int8
             .as_ref()
             .filter(|state| (nq > 8 || state.pure) && !state.fp16_mlp);
-        #[cfg(not(feature = "kernel-checks"))]
+        #[cfg(not(any(feature = "kernel-checks", feature = "pplx-webgpu")))]
         let int8_mlp: Option<()> = None;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let mut quantized_activated = None;
-        #[cfg(not(feature = "kernel-checks"))]
+        #[cfg(not(any(feature = "kernel-checks", feature = "pplx-webgpu")))]
         let quantized_activated: Option<Buffer> = None;
         #[allow(unused_mut)]
         let mut quantized_down: Option<Buffer> = None;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if int8_mlp.is_some() && self.grouped_q4() && self.fused_mlp && self.pipelines.contains_key("q4_mlp") {
             let input = self.int8_input(&mut e, &norm, nq, D)?;
             let output = self.empty(nq * (9216 / 64) * 17)?;
@@ -869,7 +869,7 @@ impl Gpu {
             )?;
             quantized_down = Some(output);
         }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if let Some(state) = int8_mlp.filter(|state| state.fused && quantized_down.is_none()) {
             let gate = state
                 .weight(get("mlp.gate_proj.weight", &[9216, D])?)
@@ -888,7 +888,7 @@ impl Gpu {
             )?;
             quantized_activated = Some(output);
         }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if int8_mlp.is_some()
             && self.grouped_q4()
             && quantized_down.is_none()

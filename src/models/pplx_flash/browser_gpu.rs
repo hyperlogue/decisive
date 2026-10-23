@@ -31,13 +31,13 @@ pub struct BrowserGpu {
     work: Work,
     answers: serde_json::Map<String, Value>,
     started: bool,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     benchmark: bool,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     raw_logits: Vec<Value>,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     resident_layers: Vec<HashMap<String, webgpu::Tensor>>,
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     auxiliary_bits: u32,
 }
 #[wasm_bindgen(js_class=PplxFlashWebGpu)]
@@ -60,7 +60,7 @@ impl BrowserGpu {
             headers_json,
         )
     }
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     #[wasm_bindgen(js_name=createConfigured)]
     pub async fn create_configured(
         config: &[u8],
@@ -71,6 +71,16 @@ impl BrowserGpu {
         headers_json: &str,
         mode: &str,
         profile: bool,
+    ) -> Result<BrowserGpu, JsValue> {
+        Self::configured(config, decision, joint, tokenizer, readout, headers_json, mode, profile, true, None).await
+    }
+}
+
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
+impl BrowserGpu {
+    pub(crate) async fn configured(
+        config: &[u8], decision: &[u8], joint: &[u8], tokenizer: &[u8],
+        readout: &[u8], headers_json: &str, mode: &str, profile: bool, tune: bool, tuning_budget_ms: Option<u32>,
     ) -> Result<BrowserGpu, JsValue> {
         let (decoder_mode, auxiliary_bits) = match mode {
             "int8-all" => ("int8-tuned", 8),
@@ -84,7 +94,7 @@ impl BrowserGpu {
             "q4-e4-scan-staged" => ("q4-e4-scan-staged-reuse", 0),
             _ => (mode, 0),
         };
-        let gpu = webgpu::Gpu::checkpoint(decoder_mode, profile)
+        let gpu = webgpu::Gpu::checkpoint_with_tuning(decoder_mode, profile, tune, tuning_budget_ms)
             .await
             .map_err(error)?;
         let mut model = Self::from_parts(
@@ -96,7 +106,7 @@ impl BrowserGpu {
             readout,
             headers_json,
         )?;
-        model.benchmark = true;
+        model.benchmark = cfg!(feature = "kernel-checks");
         if model.gpu.grouped_q4() && model.engine.packed_readout.is_empty() {
             return Err(error("grouped Q4 requires a packed Q4 readout"));
         }
@@ -106,7 +116,11 @@ impl BrowserGpu {
         }
         Ok(model)
     }
-    #[cfg(feature = "kernel-checks")]
+ }
+
+#[wasm_bindgen(js_class=PplxFlashWebGpu)]
+impl BrowserGpu {
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     pub fn diagnostics(&self) -> String {
         json!({"logits":self.raw_logits}).to_string()
     }
@@ -136,7 +150,7 @@ impl BrowserGpu {
         }
         self.tensors.clear();
         self.answers.clear();
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         {
             self.raw_logits.clear();
             if self.resident_layers.is_empty() {
@@ -176,7 +190,7 @@ impl BrowserGpu {
                     .map(|b| f32::from_bits((u16::from_le_bytes([b[0], b[1]]) as u32) << 16)),
             );
         }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.auxiliary_bits != 0 {
             reconstruct_rows(&mut self.work.hidden, D, self.auxiliary_bits).map_err(error)?;
         }
@@ -213,7 +227,7 @@ impl BrowserGpu {
         }
         Ok(())
     }
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     #[wasm_bindgen(js_name=stageTensor)]
     pub async fn stage_tensor(&mut self, layer: usize, name: &str, bytes: &[u8]) -> Result<(), JsValue> {
         if self.buffers.is_some() { return Err(error("resident and double-buffered weights are mutually exclusive")); }
@@ -235,7 +249,7 @@ impl BrowserGpu {
         self.tensors.insert(name.into(), self.gpu.upload_resident(bytes, range.shape).await.map_err(error)?);
         Ok(())
     }
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     #[wasm_bindgen(js_name=cacheLayer)]
     pub async fn cache_layer(&mut self, layer: usize) -> Result<(), JsValue> {
         if self.buffers.is_some() { return Err(error("resident and double-buffered weights are mutually exclusive")); }
@@ -253,7 +267,7 @@ impl BrowserGpu {
     pub fn adapter(&self) -> String {
         #[allow(unused_mut)]
         let mut info = self.gpu.info();
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.gpu.grouped_q4() {
             info["quantization"] = self.gpu.q4_info();
         }
@@ -262,7 +276,7 @@ impl BrowserGpu {
             info["weight_buffer_banks"] = json!(2);
             info["queued_streaming_supported"] = json!(self.gpu.supports_queued());
         }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.resident_layers.len() == 32 {
             info["weight_residency"] = json!("all-decoder-layers");
             info["resident_decoder_weight_bytes"] = json!(self.resident_layers.iter()
@@ -272,7 +286,7 @@ impl BrowserGpu {
             info["queued_resident_supported"] = json!(self.gpu.grouped_q4() && self.gpu.supports_queued());
             info["quantization"] = self.gpu.q4_info();
         }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         {
             info["auxiliary_quantization"] = json!({
                 "weight_bits": self.auxiliary_bits,
@@ -289,7 +303,7 @@ impl BrowserGpu {
     pub fn weight_buffers(&mut self) -> Result<WeightBuffers, JsValue> {
         if !self.chunks.is_empty() || self.started { return Err(error("configure buffering before preparing a request")); }
         if !self.tensors.is_empty() { return Err(error("weights are already being staged through the model")); }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if !self.resident_layers.is_empty() { return Err(error("resident and double-buffered weights are mutually exclusive")); }
         let buffers = self.buffers.get_or_insert_with(|| self.gpu.weight_uploader(self.index.clone()));
         Ok(buffers.clone())
@@ -299,7 +313,7 @@ impl BrowserGpu {
         if !self.pending_layers.is_empty() { return Err(error("collect queued layers before synchronous execution")); }
         let result = self.run_layer_inner().await;
         if result.is_err() {
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             if self.resident_layers.is_empty() { self.gpu.clear_checkpoint_weights(); }
             for (_, tensor) in self.tensors.drain() { tensor.buffer.destroy(); }
             self.gpu.reset();
@@ -311,7 +325,7 @@ impl BrowserGpu {
     #[wasm_bindgen(js_name=supportsQueued)]
     pub fn supports_queued(&self) -> bool {
         let weights = self.buffers.is_some();
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let weights = weights || self.resident_layers.len() == 32 && self.gpu.grouped_q4();
         weights && self.gpu.supports_queued()
     }
@@ -327,10 +341,10 @@ impl BrowserGpu {
                 self.tensors.insert(name, self.gpu.prepare_uploaded(&tensor).map_err(error)?);
             }
         }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.buffers.is_some() { self.gpu.prepare_queued_weights(&self.tensors).map_err(error)?; }
         let tensors = &self.tensors;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let tensors = if self.resident_layers.len() == 32 { &self.resident_layers[self.layer] } else { tensors };
         let work = self.gpu.queue_layer(tensors, self.layer,
             (self.layer == 31).then(|| self.chunks[self.chunk].markers.as_slice())).map_err(error)?;
@@ -349,9 +363,9 @@ impl BrowserGpu {
         let result = self.gpu.collect_layer(pending.work).await;
         for tensor in pending.tensors.into_values() {
             if self.buffers.as_ref().is_some_and(|buffers| buffers.owns(&tensor.buffer)) { continue; }
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             self.gpu.retain_weight_buffer(tensor.buffer);
-            #[cfg(not(feature = "kernel-checks"))]
+            #[cfg(not(any(feature = "kernel-checks", feature = "pplx-webgpu")))]
             tensor.buffer.destroy();
         }
         if let Some(buffers) = &self.buffers { buffers.collected(pending.layer); }
@@ -366,7 +380,7 @@ impl BrowserGpu {
             if let Err(error) = self.wait_layer().await { failure = Some(error); }
         }
         if let Err(error) = self.gpu.wait_idle().await { failure = Some(JsValue::from_str(&error.to_string())); }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.resident_layers.is_empty() { self.gpu.clear_checkpoint_weights(); }
         for tensor in self.tensors.drain().map(|(_, t)| t) { tensor.buffer.destroy(); }
         self.gpu.reset();
@@ -389,7 +403,7 @@ impl BrowserGpu {
             .engine
             .logits(&mut self.work, &norm, chunk)
             .map_err(error)?;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.benchmark {
             if !logits.iter().flatten().all(|v| v.is_finite()) {
                 return Err(error("nonfinite checkpoint logits"));
@@ -443,7 +457,7 @@ impl BrowserGpu {
             return Err(error("no active layer"));
         }
         let resident = false;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let resident = resident || self.resident_layers.len() == 32;
         let pack_start = monotonic_now();
         if let Some(buffers) = &self.buffers {
@@ -451,7 +465,7 @@ impl BrowserGpu {
                 .map(|(name, tensor)| Ok((name, self.gpu.prepare_uploaded(&tensor)?)))
                 .collect::<Result<HashMap<_, _>>>().map_err(error)?;
         }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.benchmark {
             if !resident {
                 self.gpu.prepare_checkpoint_weights(&self.tensors).await.map_err(error)?;
@@ -465,7 +479,7 @@ impl BrowserGpu {
         };
         let start = monotonic_now();
         let tensors = &self.tensors;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let tensors = if resident { &self.resident_layers[self.layer] } else { tensors };
         let upload = self.buffers.clone();
         let result = self
@@ -481,15 +495,15 @@ impl BrowserGpu {
                 move || { if let Some(buffers) = upload { buffers.submitted(); } },
             )
             .await;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if !resident {
             self.gpu.clear_checkpoint_weights();
         }
         for (_, t) in self.tensors.drain() {
             if self.buffers.as_ref().is_some_and(|b| b.owns(&t.buffer)) { continue; }
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             self.gpu.retain_weight_buffer(t.buffer);
-            #[cfg(not(feature = "kernel-checks"))]
+            #[cfg(not(any(feature = "kernel-checks", feature = "pplx-webgpu")))]
             t.buffer.destroy();
         }
         self.gpu.discard_scratch();
@@ -497,7 +511,7 @@ impl BrowserGpu {
         let compute_ms = monotonic_now() - start;
         #[allow(unused_mut)]
         let mut profile = Value::Null;
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.benchmark {
             profile = self.gpu.finish_profile().await.map_err(error)?;
         }
@@ -531,19 +545,19 @@ impl BrowserGpu {
             work: Work::default(),
             answers: serde_json::Map::new(),
             started: false,
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             benchmark: false,
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             raw_logits: Vec::new(),
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             resident_layers: Vec::new(),
-            #[cfg(feature = "kernel-checks")]
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             auxiliary_bits: 0,
         })
     }
 }
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 fn reconstruct_rows(values: &mut [f32], columns: usize, bits: u32) -> Result<()> {
     ensure!([4, 8].contains(&bits) && columns > 0 && values.len() % columns == 0, "invalid row quantization shape or precision");
     ensure!(values.iter().all(|v| v.is_finite()), "nonfinite row quantization input");
@@ -561,7 +575,7 @@ fn reconstruct_rows(values: &mut [f32], columns: usize, bits: u32) -> Result<()>
     Ok(())
 }
 
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 #[wasm_bindgen(js_name=pplxFlashQuantizeRows)]
 pub fn quantize_rows(values: &[f32], columns: usize, bits: u32) -> Result<Vec<f32>, JsValue> {
     let mut output = values.to_vec();
@@ -573,7 +587,7 @@ impl Drop for BrowserGpu {
     fn drop(&mut self) {
         if let Some(buffers) = &self.buffers { buffers.close(); }
         for tensor in self.tensors.values() { tensor.buffer.destroy(); }
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         for tensor in self.resident_layers.iter().flat_map(|layer| layer.values()) { tensor.buffer.destroy(); }
     }
 }

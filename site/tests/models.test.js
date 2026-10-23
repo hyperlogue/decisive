@@ -2,8 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {selectModel,requirePublished,emptyModelState,validateModelState} from '../lib/model-catalog.js';
-import {loadDecima} from '../lib/model-runtime.js';
-import {loadPplxFlash} from '../lib/pplx-runtime.js';
 
 test('both models pin their release and exact download size; unpublished entries stay blocked',async()=>{
   const catalog=JSON.parse(await readFile(new URL('../models.json',import.meta.url)));
@@ -25,53 +23,6 @@ test('both models pin their release and exact download size; unpublished entries
   assert.throws(()=>requirePublished({...q4,available:false}),/modelComingSoon/);
   assert.throws(()=>requirePublished({...q4,repository:null}),/modelComingSoon/);
   assert.notEqual(q4.storeName,decima.storeName);
-});
-
-test('Q4 uses packed local files, streaming WebGPU, the 1024-token cap, and actual output metrics',async()=>{
-  const api={},files={'q4-e4-layer-00.bin':new Blob(['packed'])},progress=[];
-  const request={state:'complete draft',questions:{}};
-  let freed=false,seenRequest,seenLimit;
-  const result={response:{answers:{},usage:{input_tokens:42}},elapsed_ms:123,backend:'webgpu'};
-  const runtime=await loadPplxFlash(api,files,m=>progress.push(m),async(a,f,onProgress,backend,configuration)=>{
-    assert.equal(a,api);assert.equal(f,files);
-    assert.equal(backend,'webgpu');
-    assert.deepEqual(configuration,{mode:'q4-e4',resident:false,profile:false});
-    return {dispose(){freed=true;},async predict(r,limit){seenRequest=r;seenLimit=limit;onProgress('Layer 1/32');return result;}};
-  });
-  const output=await runtime.predict(request);
-  assert.equal(seenRequest,request);assert.equal(seenLimit,1024);
-  assert.equal(output.response,result.response);assert.equal(output.elapsed_ms,123);
-  assert.equal(output.model,'Pplx Flash · Q4');assert.deepEqual(progress,['Layer 1/32']);
-  runtime.dispose();assert.equal(freed,true);
-});
-
-test('Q4 cancellation stops at a layer boundary and releases the signal for another request',async()=>{
-  const controller=new AbortController();let calls=0;
-  const runtime=await loadPplxFlash({}, {}, ()=>{}, async(a,f,progress)=>({dispose(){},async predict(){
-    if(++calls===1)controller.abort();
-    progress('Layer 2/32');return {response:{},elapsed_ms:1,backend:'webgpu'};
-  }}));
-  await assert.rejects(runtime.predict({},controller.signal),{name:'AbortError'});
-  await runtime.predict({});assert.equal(calls,2);
-  await assert.rejects(runtime.predict({},controller.signal),{name:'AbortError'});
-  assert.equal(calls,2,'already-cancelled requests never reach inference');
-});
-test('Decima receives the encoder File without buffering it into WASM memory',async()=>{
-  const encoder={arrayBuffer(){assert.fail('Encoder must stay a Blob/File');}};
-  const files=Object.fromEntries(['pytorch/decima.json','pytorch/encoder/config.json','pytorch/encoder/tokenizer.json','pytorch/head.safetensors'].map(name=>[name,new Blob(['{}'])]));
-  files['pytorch/encoder/model.safetensors']=encoder;
-  let freed=false,received;
-  const api={DecimaWebGpuModel:{async create(a,b,c,weights,d){
-    assert.equal(weights,encoder);
-    assert.ok([a,b,c,d].every(bytes=>bytes instanceof Uint8Array));
-    return {async predict(json){received=JSON.parse(json);return '{"answers":{}}';},free(){freed=true;}};
-  }}};
-  const runtime=await loadDecima(api,files);
-  const request={state:'private draft',questions:{}};
-  const output=await runtime.predict(request);
-  assert.deepEqual(received,request);assert.equal(output.backend,'webgpu');
-  assert.deepEqual(output.response,{answers:{}});
-  runtime.dispose();assert.equal(freed,true);
 });
 
 test('a stale worker cannot attach Pplx size or files to Decima',async()=>{

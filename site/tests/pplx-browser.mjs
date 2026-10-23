@@ -9,24 +9,26 @@ const payload={'packed-q4-e4.json':Buffer.from('{"test":true}'),'q4-e4-layer-00.
 const fixture={...original,repository:'example/q4-browser-test',revision:'fixture',files:Object.fromEntries(Object.entries(payload).map(([name,data])=>[name,{bytes:data.length,sha256:createHash('sha256').update(data).digest('hex')}]))};
 const recorded=JSON.parse(await fs.readFile(new URL('./fixtures/english-result.json',import.meta.url)));
 for(const answer of Object.values(recorded.output.response.answers)){delete answer.max_probabilities;delete answer.chunk;}
-const source=await fs.readFile(new URL('../lib/pplx-runtime.js',import.meta.url),'utf8');
-const double=`const importRuntime=async(api,files,progress,backend,config)=>{
-  if(backend!=='webgpu'||config.mode!=='q4-e4'||config.resident!==false)throw Error('Wrong Q4 configuration');
-  if(!files['q4-e4-layer-00.bin']||files['model-00001-of-00002.safetensors'])throw Error('Wrong checkpoint');
-  return {dispose(){},async predict(request,limit){
-    if(limit!==1024||request.long!==undefined)throw Error('Wrong token limit/request');
+const double=`export async function loadModelInWorker(api,options,controls){
+  if(options.backend!=='webgpu'||options.format!=='q4-e4')throw Error('Wrong Q4 configuration');
+  if(!options.source.files['q4-e4-layer-00.bin'])throw Error('Wrong checkpoint');
+  return {info:{},async createCache(){return {async dispose(){}};},async dispose(){},async predict(request,{signal,cache}){
+    if(options.parameters.maxSequenceTokens!==1024||request.long!==undefined||!cache)throw Error('Wrong prediction configuration');
     const draft=request.state.context[1].content;
-    if(draft==='too long fixture')throw Error('single question exceeds token limit: 1200 > 1024; inputs are never truncated');
-    for(let i=1;i<=32;i++){await new Promise(r=>setTimeout(r,draft==='cancel this inference'?200:30));progress('Layer '+i+'/32');}
+    if(draft==='too long fixture')throw Object.assign(Error('Input too long'),{code:'INPUT_TOO_LONG'});
+    if(draft==='memory limit fixture')throw Object.assign(Error('pplx-flash / webgpu / q4-e4 exceeds device limits'),{code:'RESOURCE_LIMIT'});
+    if(draft==='unsupported fixture')throw Object.assign(Error('Selected weight format is unavailable in this build'),{code:'FORMAT_NOT_COMPILED'});
+    if(draft==='missing feature fixture')throw Object.assign(Error('pplx-flash / webgpu / q4-e4 requires shader-f16'),{code:'MISSING_GPU_FEATURE'});
+    for(let i=1;i<=32;i++){await new Promise(r=>setTimeout(r,draft==='cancel this inference'?200:30));signal.throwIfAborted();controls.onProgress({phase:'inference',completed:i-1,total:32});}
     return {response:${JSON.stringify(recorded.output.response)},backend:'webgpu',elapsed_ms:123};
   }};
-};`;
+}`;
 const browser=await chromium.launch({executablePath:process.env.PRIVACY_BROWSER_EXECUTABLE,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
 try{
   const context=await browser.newContext({serviceWorkers:'block',viewport:{width:390,height:844}});
   await context.route('**/models.json',r=>r.fulfill({json:{...catalog,models:catalog.models.map(m=>m.id===fixture.id?fixture:m)}}));
   await context.route('**/lib/webgpu.js',r=>r.fulfill({contentType:'text/javascript',body:'export async function checkWebGPU(){return true;}'}));
-  await context.route('**/lib/pplx-runtime.js',r=>r.fulfill({contentType:'text/javascript',body:source.replace(/^const importRuntime = .*;$/m,double)}));
+  await context.route('**/sdk/local.js',r=>r.fulfill({contentType:'text/javascript',body:double}));
   const requests=[],errors=[];
   await context.route('https://huggingface.co/example/q4-browser-test/**',r=>{
     requests.push(r.request().url());const body=payload[r.request().url().split('/').at(-1)];
@@ -56,6 +58,16 @@ try{
   await page.fill('#message-input','too long fixture');
   await page.waitForFunction(()=>document.getElementById('analysis-error').textContent.includes('1,024-token'));
   assert.equal(await page.locator('#share-result').isDisabled(),true);
+  for(const [draft,message,detail] of [
+    ['memory limit fixture','memory budget','exceeds device limits'],
+    ['unsupported fixture','cannot run the selected model','unavailable in this build'],
+    ['missing feature fixture','shader-f16','requires shader-f16'],
+  ]){
+    await page.fill('#message-input',draft);await page.click('#open-setup');await page.click('#start-analysis');
+    await page.waitForFunction(message=>document.getElementById('analysis-error').textContent.includes(message),message);
+    assert.ok((await page.locator('#raw-output').textContent()).includes(detail));
+    assert.equal(await page.locator('#share-result').isDisabled(),true);
+  }
   await page.fill('#message-input','cancel this inference');await page.click('#open-setup');await page.click('#start-analysis');
   await page.waitForFunction(()=>document.getElementById('composer-status').textContent.includes('Layer'));
   await page.click('#open-setup');await page.click('#manage-models');await page.click('#stop-model');
@@ -69,5 +81,5 @@ try{
     return (await(await dir.getFileHandle('preserved.txt')).getFile()).text();
   });
   assert.equal(kept,'keep Decima');assert.deepEqual(errors,[]);
-  console.log('Q4 supported-device flow: verified download, adapter, 1024 limit, OPFS reuse, cancellation, and scoped deletion: PASS (inference mocked)');
+  console.log('Q4 supported-device flow: verified download, adapter, 1024 limit, capability/memory/build errors, OPFS reuse, cancellation, and scoped deletion: PASS (inference mocked)');
 }finally{await browser.close();}

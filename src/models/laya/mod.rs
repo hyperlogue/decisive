@@ -7,7 +7,7 @@ pub mod router;
 pub mod schema;
 pub mod specialization;
 #[cfg(feature = "wasm")]
-mod web;
+pub(crate) mod web;
 pub mod weights;
 
 use crate::laya::{

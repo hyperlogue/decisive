@@ -1,4 +1,4 @@
-#[cfg(feature = "kernel-checks")]
+#[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
 use anyhow::Context;
 use anyhow::{Result, ensure};
 use std::cell::RefCell;
@@ -19,7 +19,7 @@ impl Profile {
             entries: RefCell::new(None),
         }
     }
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     pub fn begin(&self) {
         *self.entries.borrow_mut() = Some(Vec::new());
     }
@@ -41,7 +41,7 @@ impl Profile {
             end_of_pass_write_index: Some(index + 1),
         }))
     }
-    #[cfg(feature = "kernel-checks")]
+    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     pub async fn finish(&self, device: &super::Device) -> Result<serde_json::Value> {
         let entries = self
             .entries

@@ -4,8 +4,8 @@ use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen]
 pub struct BrowserModel {
-    model: Model,
-    scratch: Scratch,
+    pub(crate) model: Model,
+    pub(crate) scratch: Scratch,
 }
 
 #[wasm_bindgen]
@@ -259,16 +259,7 @@ impl BrowserModel {
             kernel,
         )
         .map_err(|e| JsValue::from_str(&format!("{e:#}")))?;
-        let mut scratch = Scratch::default();
-        if kernel == crate::laya::cpu::Kernel::WasmSimd {
-            scratch.set_prune_head(true);
-            scratch
-                .set_length_rules(Some(crate::laya::specialization::wasm()))
-                .map_err(js_error)?;
-            scratch
-                .set_optimizations(true, false, 1)
-                .map_err(js_error)?;
-        }
+        let scratch = inference_scratch().map_err(js_error)?;
         Ok(Self { model, scratch })
     }
     #[wasm_bindgen(js_name=setLengthRules)]
@@ -297,4 +288,19 @@ impl BrowserModel {
     pub fn state_cache_stats(&self) -> String {
         serde_json::to_string(&self.scratch.state_cache_stats()).unwrap()
     }
+}
+
+pub(crate) fn inference_scratch() -> anyhow::Result<Scratch> {
+    let kernel = crate::laya::cpu::Kernel::detect();
+    let mut scratch = Scratch::default();
+    if kernel == crate::laya::cpu::Kernel::WasmSimd {
+        scratch.set_prune_head(true);
+        scratch
+        .set_length_rules(Some(crate::laya::specialization::wasm()))
+        ?;
+        scratch
+        .set_optimizations(true, false, 1)
+        ?;
+    }
+    Ok(scratch)
 }

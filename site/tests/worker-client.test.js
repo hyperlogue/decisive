@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {WorkerClient} from '../lib/worker-client.js';
+import {WorkerClient} from '../.compiled/lib/worker-client.js';
 const tick = () => new Promise(resolve=>setTimeout(resolve,0));
 
 test('storage refresh and download are ordered, but pause bypasses the queue',async()=>{

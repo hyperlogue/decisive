@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - site/**
+      - browser/**
       - src/**
       - Cargo.toml
       - Cargo.lock
@@ -20,6 +21,7 @@ on:
     branches: [main]
     paths:
       - site/**
+      - browser/**
       - src/**
       - Cargo.toml
       - Cargo.lock
@@ -68,10 +70,14 @@ jobs:
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
 
       - name: Install frontend dependencies
-        run: npm ci --prefix site --ignore-scripts --no-audit --no-fund
+        run: |
+          npm ci --prefix browser --ignore-scripts --no-audit --no-fund
+          npm ci --prefix site --ignore-scripts --no-audit --no-fund
 
       - name: Test frontend
         run: |
+          npm test --prefix browser
+          node browser/node_modules/typescript/bin/tsc -p site/tsconfig.json
           node --test site/tests/*.test.js
           python3 -m unittest discover -s site/tests -p "test_*.py"
 
@@ -117,7 +123,7 @@ jobs:
         env:
           PAGES_BASE: ${{ steps.pages.outputs.base_path }}
         run: |
-          DECISIVE_WASM_FEATURES=decima,pplx-flash,wasm,webgpu,kernel-checks \
+          DECISIVE_WASM_FEATURES=decima,pplx-flash,wasm,webgpu,pplx-webgpu \
             bash scripts/build_decima_wasm.sh artifacts/web/pages/pkg
           python3 site/build.py --package artifacts/web/pages/pkg
           python3 site/pages.py --out artifacts/pages --base "$PAGES_BASE"

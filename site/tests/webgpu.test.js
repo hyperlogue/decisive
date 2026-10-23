@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {checkWebGPU} from '../lib/webgpu.js';
+import {checkWebGPU} from '../../browser/dist/probe.js';
 
 test('WebGPU must provide a usable device, not just expose an API',async()=>{
   assert.equal(await checkWebGPU(null),false);

@@ -18,13 +18,13 @@ pub mod weights;
 #[cfg(feature = "cpu")]
 pub use native::{Model, Precision};
 #[cfg(all(feature = "wasm", feature = "webgpu"))]
-mod browser_gpu;
+pub(crate) mod browser_gpu;
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 mod wasm_simd;
 #[cfg(feature = "wasm")]
-mod web;
+pub(crate) mod web;
 #[cfg(all(feature = "wasm", feature = "webgpu"))]
-mod webgpu;
+pub(crate) mod webgpu;
 use anyhow::{Result, ensure};
 use backbone::{D, Layer, V, Work};
 use serde_json::{Value, json};

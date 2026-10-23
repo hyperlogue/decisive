@@ -62,7 +62,7 @@ const client=new WorkerClient(event=>{
 const scheduler=new LatestAnalysis({
   async run(draft){
     operation='inference';progress=null;paintStatus();paintStorage();
-    const request=buildRequest(draft,manifest.engine);
+    const request=buildRequest(draft);
     try {
       const output=await client.call('predict',{request,modelId:manifest.id});
       return {request,output,modelName:manifest.name,scores:readScores(output.response),elapsed:output.elapsed_ms,

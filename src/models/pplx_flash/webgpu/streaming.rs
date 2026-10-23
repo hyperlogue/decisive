@@ -356,7 +356,7 @@ impl Gpu {
         }
     }
     pub(crate) fn prepare_uploaded(&self, tensor: &Tensor) -> Result<Tensor> {
-        #[cfg(feature = "kernel-checks")]
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if self.fp16_projections && tensor.shape.len() == 2 && !self.grouped_q4() {
             return Ok(Tensor {
                 shape: tensor.shape.clone(),

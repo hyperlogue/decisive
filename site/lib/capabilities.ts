@@ -8,9 +8,9 @@ export async function probeCapabilities() {
   } catch {}
   try {
     const root = await navigator.storage.getDirectory();
-    state.storage = !!root && typeof FileSystemFileHandle.prototype.createSyncAccessHandle === 'function' && !!navigator.locks;
+    state.storage = !!root && typeof (FileSystemFileHandle.prototype as FileSystemFileHandle & {createSyncAccessHandle?:unknown}).createSyncAccessHandle === 'function' && !!navigator.locks;
   } catch {}
-  if (!state.storage && navigator.storage?.getDirectory && navigator.locks && state.secure) {
+  if (!state.storage && typeof navigator.storage?.getDirectory === 'function' && navigator.locks && state.secure) {
     state.storage = true;
   }
   return state;

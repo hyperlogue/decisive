@@ -33,7 +33,7 @@ mod wasm_simd;
 #[cfg(all(target_arch = "wasm32", feature = "decima-wasm-threads"))]
 mod wasm_threads;
 #[cfg(feature = "wasm")]
-mod web;
+pub(crate) mod web;
 #[cfg(feature = "webgpu")]
 pub mod webgpu;
 mod weights;

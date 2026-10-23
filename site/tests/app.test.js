@@ -10,7 +10,7 @@ test('the complete draft stays data inside the two-message context',()=>{
   const request=buildRequest(text);
   assert.equal(request.state.context.length,2);
   assert.equal(request.state.context[1].content,text);
-  assert.equal(request.long,true);
+  assert.equal(Object.hasOwn(request,'long'),false);
   const pplx=buildRequest(text,'pplx-q4');
   assert.equal(Object.hasOwn(pplx,'long'),false);
   assert.deepEqual(pplx.state,request.state);

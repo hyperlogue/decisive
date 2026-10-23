@@ -612,7 +612,7 @@ impl Model {
 }
 
 #[cfg(feature = "wasm")]
-mod browser {
+pub(crate) mod browser {
     use super::*;
     use wasm_bindgen::prelude::*;
     fn error(e: impl std::fmt::Display) -> JsValue {
@@ -620,7 +620,7 @@ mod browser {
     }
     #[wasm_bindgen(js_name=LayaWebGpuModel)]
     pub struct BrowserModel {
-        model: Model,
+        pub(crate) model: Model,
     }
     #[wasm_bindgen(js_class=LayaWebGpuModel)]
     impl BrowserModel {

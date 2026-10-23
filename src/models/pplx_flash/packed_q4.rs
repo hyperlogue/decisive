@@ -13,7 +13,7 @@ pub(super) fn size(rows: usize, columns: usize) -> Result<usize> {
         .ok_or_else(|| anyhow::anyhow!("packed matrix size overflow"))
 }
 
-#[cfg(any(feature = "cpu", feature = "kernel-checks", test))]
+#[cfg(any(feature = "cpu", feature = "kernel-checks", feature = "pplx-webgpu", test))]
 pub(super) fn pack(bytes: &[u8], rows: usize, columns: usize) -> Result<Vec<u8>> {
     let mut output = Vec::with_capacity(size(rows, columns)?);
     ensure!(

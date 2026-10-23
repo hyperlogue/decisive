@@ -46,6 +46,10 @@ impl Gpu {
     }
 
     pub(crate) async fn checkpoint(mode: &str, profile: bool) -> Result<Self> {
+        Self::checkpoint_with_tuning(mode, profile, true, None).await
+    }
+
+    pub(crate) async fn checkpoint_with_tuning(mode: &str, profile: bool, tune: bool, tuning_budget_ms: Option<u32>) -> Result<Self> {
         let reuse = mode.ends_with("-reuse");
         let mode = mode.strip_suffix("-reuse").unwrap_or(mode);
         let (mode, forced_scan) = if let Some(mode) = mode.strip_suffix("-scan-chained") {
@@ -174,11 +178,12 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             gpu.install_pipeline("q4_expand", q4::expand()).await?;
         }
         if gpu.grouped_q4() {
+            let budget = crate::inference::TuningBudget::new(tune, tuning_budget_ms, now_ms());
             gpu.install_pipeline("delta_scan_chained", shaders::source(shaders::DELTA_SCAN_CHAINED))
                 .await?;
             gpu.install_pipeline("delta_scan_staged", shaders::source(shaders::DELTA_SCAN_STAGED))
                 .await?;
-            gpu.select_delta_scan(forced_scan).await?;
+            if budget.permits(now_ms()) { gpu.select_delta_scan(forced_scan).await?; }
             // Both match the tuned projection kernel bit for bit, so they require that kernel.
             if wide {
                 gpu.install_pipeline("int8_gemm_narrow", include_str!("grouped_q4_narrow.wgsl").into())
@@ -188,13 +193,13 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
                         .await?;
                 }
             }
-            gpu.select_norm().await?;
+            if budget.permits(now_ms()) { gpu.select_norm().await?; }
             if wide {
-                gpu.select_gemm().await?;
+                if budget.permits(now_ms()) { gpu.select_gemm().await?; }
                 gpu.install_pipeline("int8_silu_input", grouped_q4::quantize_silu()).await?;
-                if gpu.pipelines.contains_key("q4_mlp") {
+                if budget.permits(now_ms()) && gpu.pipelines.contains_key("q4_mlp") {
                     gpu.select_mlp().await?;
-                }
+                } else { gpu.fused_mlp = false; }
             }
             // Per-dispatch timestamps need their own passes.
             gpu.device.batch_passes.set(!profile);

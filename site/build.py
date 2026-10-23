@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 import shutil
+import subprocess
 
 SITE = Path(__file__).resolve().parent
 ROOT = SITE.parent
@@ -20,8 +21,15 @@ if digest(package / "decisive_bg.wasm") != metadata["wasm_sha256"]:
 for name, expected in metadata["sources"].items():
     if digest(ROOT / name) != expected:
         raise SystemExit(f"Package does not match current source: {name}. Build an unchanged runtime first.")
-if not {"decima", "pplx-flash", "wasm", "webgpu", "kernel-checks"} <= set(metadata["features"].split(",")):
-    raise SystemExit("Package must include decima, pplx-flash, wasm, webgpu, and kernel-checks.")
+if not {"decima", "pplx-flash", "wasm", "webgpu", "pplx-webgpu"} <= set(metadata["features"].split(",")):
+    raise SystemExit("Package must include decima, pplx-flash, wasm, webgpu, and pplx-webgpu.")
+
+for output in [ROOT / "browser/dist", SITE / ".compiled"]:
+    if output.exists():
+        shutil.rmtree(output)
+compiler = ROOT / "browser/node_modules/typescript/bin/tsc"
+subprocess.run(["node", str(compiler), "-p", str(ROOT / "browser/tsconfig.json")], check=True)
+subprocess.run(["node", str(compiler), "-p", str(SITE / "tsconfig.json")], check=True)
 
 dist = SITE / "dist"
 if dist.exists():
@@ -29,8 +37,13 @@ if dist.exists():
 dist.mkdir()
 for name in ["index.html", "style.css", "app.js", "models.json"]:
     shutil.copyfile(SITE / name, dist / name)
-for name in ["lib", "workers", "assets"]:
-    shutil.copytree(SITE / name, dist / name)
+for name in ["lib", "assets"]:
+    shutil.copytree(SITE / name, dist / name, ignore=shutil.ignore_patterns("*.ts"))
+shutil.copytree(ROOT / "browser/dist", dist / "sdk", ignore=shutil.ignore_patterns("*.d.ts"))
+for name in ["lib", "workers"]:
+    shutil.copytree(SITE / ".compiled" / name, dist / name, dirs_exist_ok=True)
+    for file in (dist / name).glob("*.js"):
+        file.write_text(file.read_text().replace("@decisive/browser/", "../sdk/"))
 
 fontsource = SITE / "node_modules/@fontsource/noto-sans-sc"
 if not (fontsource / "400.css").is_file():
@@ -49,9 +62,6 @@ if not faces:
     raise SystemExit("No font faces found in @fontsource/noto-sans-sc/400.css.")
 shutil.copyfile(fontsource / "LICENSE", fonts / "LICENSE.txt")
 (dist / "style.css").write_text("\n".join(faces) + "\n" + (dist / "style.css").read_text())
-(dist / "runtime").mkdir()
-for name in ["runtime.js", "embedding-cache.js", "read-worker.js"]:
-    shutil.copyfile(ROOT / "examples/pplx-flash" / name, dist / "runtime" / name)
 (dist / "pkg").mkdir()
 for name in ["decisive.js", "decisive_bg.wasm", "build.json"]:
     shutil.copyfile(package / name, dist / "pkg" / name)

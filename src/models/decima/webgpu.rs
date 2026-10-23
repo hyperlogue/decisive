@@ -1090,7 +1090,7 @@ fn without_vocabulary(header: &[u8]) -> Result<(Vec<u8>, std::ops::Range<usize>)
 }
 
 #[cfg(feature = "wasm")]
-mod browser {
+pub(crate) mod browser {
     use super::*;
     use wasm_bindgen::prelude::*;
     fn error(e: impl std::fmt::Display) -> JsValue {
@@ -1155,8 +1155,8 @@ mod browser {
     }
     #[wasm_bindgen(js_name=DecimaWebGpuModel)]
     pub struct BrowserModel {
-        model: Model,
-        session: Session,
+        pub(crate) model: Model,
+        pub(crate) session: Session,
     }
     #[wasm_bindgen(js_class=DecimaWebGpuModel)]
     impl BrowserModel {

@@ -3,8 +3,8 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name=DecimaModel)]
 pub struct BrowserModel {
-    model: Model,
-    session: Session,
+    pub(crate) model: Model,
+    pub(crate) session: Session,
 }
 fn error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())

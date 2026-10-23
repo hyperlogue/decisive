@@ -1,8 +1,17 @@
+export interface Hasher { update(bytes: Uint8Array): void; finish(): string; free?(): void }
+interface SyncFile { getSize(): number; read(bytes: Uint8Array, options: {at:number}): number; write(bytes: Uint8Array, options: {at:number}): number; truncate(size:number): void; flush(): void; close(): void }
+interface FileHandle { kind:'file'; getFile(): Promise<File>; createSyncAccessHandle(): Promise<SyncFile> }
+export interface StorageDirectory { kind:'directory'; getDirectoryHandle(name:string, options?:{create?:boolean}): Promise<StorageDirectory>; getFileHandle(name:string, options?:{create?:boolean}): Promise<FileHandle>; entries(): AsyncIterableIterator<[string,FileHandle|StorageDirectory]>; removeEntry(name:string,options:{recursive:boolean}): Promise<void> }
+interface FileSpec { bytes:number; sha256:string }
+interface Manifest { repository:string; revision:string; files:Record<string,FileSpec> }
+interface Receipt { revision:string; files:Record<string,{sha256:string;modified:number}> }
+type DownloadProgress = {phase:string;name:string;bytes:number;total:number};
+
 export const STORE_NAME = 'decisive-privacy-pplx-v1';
 export const LOCK_NAME = 'decisive-privacy-model-files';
 const CHUNK = 4 * 1024 * 1024;
 
-export function validateRange(response, offset, expectedSize) {
+export function validateRange(response: Pick<Response, "status"|"headers">, offset: number, expectedSize: number) {
   if (response.status === 200) return 0;
   if (response.status !== 206) throw new Error('downloadFailed');
   const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') || '');
@@ -12,16 +21,23 @@ export function validateRange(response, offset, expectedSize) {
 }
 
 export class ModelStore {
-  constructor({manifest, root, createHasher, storeName = STORE_NAME, fetcher = (...args) => fetch(...args)}) {
-    Object.assign(this, {manifest, root, createHasher, fetcher, storeName});
+  manifest: Manifest;
+  root: StorageDirectory;
+  createHasher: () => Hasher;
+  fetcher: typeof fetch;
+  storeName: string;
+  entries: [string,FileSpec][];
+  total: number;
+  constructor({manifest, root, createHasher, storeName = STORE_NAME, fetcher = (...args: Parameters<typeof fetch>) => fetch(...args)}: {manifest:Manifest;root:StorageDirectory;createHasher:()=>Hasher;storeName?:string;fetcher?:typeof fetch}) {
+    this.manifest=manifest;this.root=root;this.createHasher=createHasher;this.fetcher=fetcher;this.storeName=storeName;
     this.entries = Object.entries(manifest.files);
     this.total = this.entries.reduce((sum, [,f]) => sum + f.bytes, 0);
   }
-  async directory(create = false) {
+  async directory(create = false): Promise<StorageDirectory | null> {
     try { return await this.root.getDirectoryHandle(this.storeName, {create}); }
-    catch (e) { if (e.name === 'NotFoundError' && !create) return null; throw e; }
+    catch (e) { if ((e as Error)?.name === 'NotFoundError' && !create) return null; throw e; }
   }
-  async receipt(dir) {
+  async receipt(dir: StorageDirectory): Promise<Receipt> {
     try {
       const data = JSON.parse(await (await (await dir.getFileHandle('verified.json')).getFile()).text());
       return data.revision === this.manifest.revision && data.files && typeof data.files === 'object' ?
@@ -29,7 +45,7 @@ export class ModelStore {
     } catch { return {revision:this.manifest.revision, files:{}}; }
   }
   async inspect() {
-    const dir = await this.directory(), receipt = dir ? await this.receipt(dir) : {files:{}};
+    const dir = await this.directory(), receipt: Receipt = dir ? await this.receipt(dir) : {revision:this.manifest.revision,files:{}};
     const files = [];
     let stored = 0;
     if (dir) {
@@ -39,7 +55,7 @@ export class ModelStore {
     }
     for (const [name, spec] of this.entries) {
       let file;
-      try { file = await (await dir?.getFileHandle(encodeURIComponent(name))).getFile(); } catch {}
+      try { file = await (await dir!.getFileHandle(encodeURIComponent(name))).getFile(); } catch {}
       const record = receipt.files[name];
       const verified = !!file && file.size === spec.bytes && record?.sha256 === spec.sha256 &&
         record.modified === file.lastModified;
@@ -50,7 +66,7 @@ export class ModelStore {
       remaining:files.reduce((sum,f)=>sum+Math.max(0,f.expected-Math.min(f.bytes,f.expected)),0),
       ready:files.length>0&&files.every(f=>f.verified)};
   }
-  async saveReceipt(dir, receipt) {
+  async saveReceipt(dir: StorageDirectory, receipt: Receipt) {
     const handle = await (await dir.getFileHandle('verified.json', {create:true})).createSyncAccessHandle();
     try {
       const bytes = new TextEncoder().encode(JSON.stringify(receipt));
@@ -59,8 +75,8 @@ export class ModelStore {
       handle.flush();
     } finally { handle.close(); }
   }
-  async download({signal, progress = () => {}}) {
-    const dir = await this.directory(true), receipt = await this.receipt(dir);
+  async download({signal, progress = () => {}}: {signal?:AbortSignal;progress?:(event:DownloadProgress)=>void}) {
+    const dir = (await this.directory(true))!, receipt = await this.receipt(dir);
     const aborted = () => { if (signal?.aborted) throw new DOMException('Paused', 'AbortError'); };
     for (const [name, spec] of this.entries) {
       aborted();
@@ -71,7 +87,8 @@ export class ModelStore {
       if (file.size === spec.bytes && record?.sha256 === spec.sha256 && record.modified === file.lastModified) continue;
       delete receipt.files[name];
       const handle = await fileHandle.createSyncAccessHandle();
-      let hasher = this.createHasher(), reader = null, success = false, offset = 0;
+      let hasher: Hasher | null = this.createHasher();
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null, success = false, offset = 0;
       try {
         offset = handle.getSize();
         if (offset > spec.bytes) { handle.truncate(0); offset = 0; }
@@ -93,7 +110,7 @@ export class ModelStore {
               headers:offset ? {Range:`bytes=${offset}-`} : {},
             });
           } catch (error) {
-            if (error.name === 'AbortError') throw error;
+            if ((error as Error)?.name === 'AbortError') throw error;
             throw new Error('downloadFailed');
           }
           if (!response.ok || !response.body) throw new Error('downloadFailed');
@@ -140,13 +157,13 @@ export class ModelStore {
   }
   async files() {
     if (!(await this.inspect()).ready) throw new Error('modelMissing');
-    const dir = await this.directory();
+    const dir = (await this.directory())!;
     return Object.fromEntries(await Promise.all(this.entries.map(async ([name])=>
       [name, await (await dir.getFileHandle(encodeURIComponent(name))).getFile()])));
   }
   async remove() {
     try { await this.root.removeEntry(this.storeName, {recursive:true}); }
-    catch(e) { if (e.name !== 'NotFoundError') throw e; }
+    catch(e) { if ((e as Error)?.name !== 'NotFoundError') throw e; }
     return this.inspect();
   }
 }

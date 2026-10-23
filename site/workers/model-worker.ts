@@ -1,18 +1,29 @@
+import type {StorageDirectory} from '../lib/model-store.js';
 import {ModelStore, LOCK_NAME} from '../lib/model-store.js';
-import {loadDecima} from '../lib/model-runtime.js';
-import {loadPplxFlash} from '../lib/pplx-runtime.js';
+import {loadModelInWorker} from '@decisive/browser/local.js';
+import type {WasmModule} from '@decisive/browser/local.js';
+import type {Predictor, OpaqueCache, Request, Progress} from '@decisive/browser/types.js';
+import {inferenceConfig} from '../lib/inference-config.js';
+import {inferenceErrorKey} from '../lib/inference-errors.js';
 import {selectModel, requirePublished} from '../lib/model-catalog.js';
 import {checkWebGPU} from '../lib/webgpu.js';
 
-let catalogPromise, apiPromise, engine = null, activeModel = null, busy = false, cancellation = null;
-const stores = new Map();
-const notify = value => self.postMessage({event:'progress', ...value});
+interface CatalogModel { id: string; name: string; engine: string; storeName: string; revision: string; repository: string; available: boolean; files: Record<string, {bytes:number;sha256:string}>; requiredFeatures?: string[] }
+interface Hasher { update(bytes: Uint8Array): void; finish(): string; free(): void }
+type API = WasmModule & {CheckpointHasher: new () => Hasher};
+interface Args { modelId?: string; backend?: string; request?: Request }
+let catalogPromise: Promise<{default:string;models:CatalogModel[]}> | undefined;
+let apiPromise: Promise<API> | null = null;
+let engine: Predictor | null = null, inferenceCache: OpaqueCache | undefined;
+let activeModel: string | null = null, busy = false, cancellation: AbortController | null = null;
+const stores = new Map<string, Promise<ModelStore>>();
+const notify = (value: Record<string, unknown> = {}) => self.postMessage({event:'progress', ...value});
 const broadcast = typeof BroadcastChannel === 'function' ? new BroadcastChannel('decisive-privacy-storage') : null;
 
 async function api() {
   if (!apiPromise) apiPromise = (async () => {
     const [module, build] = await Promise.all([
-      import('../pkg/decisive.js'),
+      import(new URL('../pkg/decisive.js', import.meta.url).href) as Promise<API>,
       fetch(new URL('../pkg/build.json', import.meta.url)).then(r=>r.json()),
     ]);
     const response = await fetch(new URL('../pkg/decisive_bg.wasm', import.meta.url));
@@ -26,68 +37,69 @@ async function api() {
   })().catch(error => { apiPromise = null; throw error; });
   return apiPromise;
 }
-async function definition(id) {
+async function definition(id?: string) {
   catalogPromise ??= fetch(new URL('../models.json', import.meta.url)).then(r=>r.json());
   return selectModel(await catalogPromise,id);
 }
-async function store(id) {
-  const model = id === 'legacy' ? {id:'legacy',storeName:'decisive-privacy-pplx-v1',revision:'retired',files:{}} : await definition(id);
+async function store(id?: string) {
+  const model = id === 'legacy' ? {id:'legacy',name:'Legacy',engine:'retired',available:false,repository:'',storeName:'decisive-privacy-pplx-v1',revision:'retired',files:{}} : await definition(id);
   if (!stores.has(model.id)) stores.set(model.id,(async()=>new ModelStore({
-    manifest:model,storeName:model.storeName,root:await navigator.storage.getDirectory(),
-    createHasher:()=>new loadedApi.PplxFlashHasher(),
+    manifest:model,storeName:model.storeName,root:await navigator.storage.getDirectory() as unknown as StorageDirectory,
+    createHasher:()=>new loadedApi!.CheckpointHasher(),
   }))());
-  return stores.get(model.id);
+  return stores.get(model.id)!;
 }
-async function inspect(id) {
+async function inspect(id?: string) {
   const model=await definition(id);
-  const state=await (await store(id)).inspect();
+  const state = await (await store(id)).inspect() as Awaited<ReturnType<ModelStore['inspect']>> & {modelId:string;revision:string;legacyStored:number};
   state.modelId=model.id;state.revision=model.revision;
   state.legacyStored=(await (await store('legacy')).inspect()).stored;
   return state;
 }
-let loadedApi;
-async function locked(mode, task) {
+let loadedApi: API | undefined;
+async function locked<T>(mode: LockMode, task: () => Promise<T>): Promise<T> {
   if (!navigator.locks) throw new Error('storageUnsupported');
   return navigator.locks.request(LOCK_NAME, {mode, ifAvailable:true}, lock => {
     if (!lock) throw new Error('anotherTab');
     return task();
   });
 }
-function unload() {
-  engine?.dispose();
+async function unload() {
+  await engine?.dispose();
+  inferenceCache = undefined;
   engine = null; activeModel = null;
 }
-async function requireModelGPU(model) {
+async function requireModelGPU(model: CatalogModel) {
   if (!(await checkWebGPU())) throw new Error('webgpuUnavailable');
   if (model.requiredFeatures?.length && !(await checkWebGPU(undefined, model.requiredFeatures))) {
     throw new Error('gpuPrecisionRequired');
   }
 }
-const methods = {
+const methods: Record<string, (args: Args) => Promise<unknown>> = {
   async capabilities() {
     const gpu=await checkWebGPU();
     return {gpu, shaderF16:gpu&&await checkWebGPU(undefined,['shader-f16']), sync:typeof FileSystemFileHandle !== 'undefined' &&
-      typeof FileSystemFileHandle.prototype.createSyncAccessHandle === 'function'};
+      typeof (FileSystemFileHandle.prototype as FileSystemFileHandle & {createSyncAccessHandle?:unknown}).createSyncAccessHandle === 'function'};
   },
   async inspect({modelId} = {}) { return locked('shared',()=>inspect(modelId)); },
   async download({modelId} = {}) {
     const model=requirePublished(await definition(modelId));
     await requireModelGPU(model);
     return locked('exclusive', async () => {
-      unload();
+      await unload();
       loadedApi = await api();
       const cache = await store(modelId), state = await cache.inspect();
       const estimate = await navigator.storage.estimate();
       if (estimate.quota && estimate.usage != null && estimate.quota-estimate.usage < state.remaining + 16*1024*1024) {
         throw new Error('insufficientSpace');
       }
-      try { await cache.download({signal:cancellation.signal, progress:notify}); return await inspect(modelId); }
+      try { await cache.download({signal:cancellation!.signal, progress:notify}); return await inspect(modelId); }
       finally { broadcast?.postMessage('changed'); }
     });
   },
   async remove({modelId} = {}) {
     return locked('exclusive',async()=>{
-      unload();
+      await unload();
       await (await store(modelId)).remove();
       const result=await inspect(modelId);
       broadcast?.postMessage('changed');
@@ -101,21 +113,24 @@ const methods = {
       return true;
     });
   },
-  async unload() { unload(); return true; },
+  async unload() { await unload(); return true; },
   async load({backend:requested,modelId} = {}) {
     return locked('shared',async()=>{
       if (requested && requested !== 'webgpu') throw new Error('webgpuRequired');
       const model=requirePublished(await definition(modelId));
       if (engine && activeModel===model.id) return {backend:'webgpu',model:model.name};
-      unload();
+      await unload();
       await requireModelGPU(model);
       notify({phase:'loading'});
       loadedApi=await api();
       const files=await (await store(model.id)).files();
-      const load=model.engine==='decima'?loadDecima:model.engine==='pplx-q4'?loadPplxFlash:null;
-      if(!load)throw new Error('modelComingSoon');
-      engine=await load(loadedApi,files,message=>notify({phase:busy&&activeModel?'analyzing':'loading',message}));
-      if(cancellation.signal.aborted){unload();throw new DOMException('Cancelled','AbortError');}
+      engine = await loadModelInWorker(loadedApi, inferenceConfig(model, files), {
+        signal: cancellation!.signal,
+        onProgress: (event: Progress) => notify({phase: activeModel ? 'analyzing' : 'loading',
+          message: event.phase === 'inference' ? `Layer ${event.completed % 32 + 1}/32` : event.phase}),
+      });
+      inferenceCache = await engine.createCache();
+      if(cancellation!.signal.aborted){await unload();throw new DOMException('Cancelled','AbortError');}
       activeModel=model.id;
       return {backend:'webgpu',model:model.name};
     });
@@ -123,15 +138,15 @@ const methods = {
   async predict({request,modelId}) {
     return locked('shared',async()=>{
       if (!engine || activeModel!==(await definition(modelId)).id) throw new Error('modelMissing');
-      if (!(await (await store(activeModel)).inspect()).ready) { unload(); throw new Error('modelMissing'); }
+      if (!(await (await store(activeModel!)).inspect()).ready) { await unload(); throw new Error('modelMissing'); }
       notify({phase:'analyzing'});
-      const result=await engine.predict(request,cancellation.signal);
-      if(cancellation.signal.aborted)throw new DOMException('Cancelled','AbortError');
+      const result=await engine.predict(request!,{cache:inferenceCache!,signal:cancellation!.signal});
+      if(cancellation!.signal.aborted)throw new DOMException('Cancelled','AbortError');
       return result;
     });
   },
 };
-self.onmessage = async ({data:{id, method, args}}) => {
+self.onmessage = async ({data:{id, method, args = {}}}: MessageEvent<{id:number;method:string;args?:Args}>) => {
   if (method === 'pause') {
     cancellation?.abort();
     self.postMessage({id,result:true}); return;
@@ -140,16 +155,16 @@ self.onmessage = async ({data:{id, method, args}}) => {
   if (!methods[method]) { self.postMessage({id,error:'unknownCommand'}); return; }
   busy = true; cancellation = new AbortController();
   try { self.postMessage({id,result:await methods[method](args)}); }
-  catch(error) {
+  catch(caught) {
+    const error = caught as Error & {code?:string};
     let code = error.name === 'AbortError' ? 'paused' :
       error.name === 'QuotaExceededError' ? 'insufficientSpace' :
       error.name === 'NoModificationAllowedError' ? 'anotherTab' :
       error.name === 'TypeError' && method === 'download' ? 'downloadFailed' : error.message;
     if (method === 'predict' || method === 'load') {
-      try { unload(); } catch {}
-      const known = ['paused','modelMissing','anotherTab','storageUnsupported','runtimeFailed','webgpuRequired','webgpuUnavailable','gpuPrecisionRequired','modelComingSoon','inputTooLong','pplxInputTooLong'];
-      if(/512|maximum state|state.*too long/i.test(String(error)))code='inputTooLong';
-      if(/single question exceeds token limit/i.test(String(error)))code='pplxInputTooLong';
+      try { await unload(); } catch {}
+      const known = ['paused','insufficientSpace','modelMissing','anotherTab','storageUnsupported','runtimeFailed','webgpuRequired','webgpuUnavailable','gpuPrecisionRequired','modelUnsupported','modelMemoryLimit','modelComingSoon','inputTooLong','pplxInputTooLong'];
+      code = inferenceErrorKey(error.code, error.code === 'INPUT_TOO_LONG' ? (await definition(args.modelId)).engine : undefined) ?? code;
       if (!known.includes(code)) code = 'inferenceFailed';
     }
     self.postMessage({id,error:code,detail:method==='predict'||method==='load'?String(error):undefined});

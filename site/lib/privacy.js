@@ -24,13 +24,12 @@ export const categories = [
 export const threshold = 0.5;
 export const welcome = 'Welcome to the community. Tell us about yourself.';
 
-export function buildRequest(draft, engine = 'decima') {
+export function buildRequest(draft) {
   return {
     state: {
       context: [{role:'assistant', content:welcome}, {role:'user', content:draft}],
     },
     questions,
-    ...(engine==='decima'?{long:true}:{}),
   };
 }
 

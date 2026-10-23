@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {ModelStore, STORE_NAME, validateRange} from '../lib/model-store.js';
+import {ModelStore, STORE_NAME, validateRange} from '../.compiled/lib/model-store.js';
 const hash = data => createHash('sha256').update(data).digest('hex');
 const hasher = () => {
   const h=createHash('sha256');
