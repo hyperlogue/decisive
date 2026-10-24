@@ -22,7 +22,7 @@ if(state.failure)throw Error(state.failure);if(state.results.length===4){
  const long=state.results[3].response;
  console.log('Long draft:',long.usage.input_tokens,'tokens in',long.usage.chunks,'chunks,',Math.round(state.results[3].elapsed_ms),'ms');
  if(!(long.usage.input_tokens>512&&long.usage.chunks>1))throw Error('Long draft was not chunked');
- if(!actual[3].includes('password'))throw Error('Password in the long draft was missed');
+ if(!actual[3].includes('credential'))throw Error('Password in the long draft was missed');
  break;
 }
 if(Date.now()-start>20*60*1000)throw Error('Smoke test timed out');

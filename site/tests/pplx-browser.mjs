@@ -9,18 +9,24 @@ const payload={'packed-q4-e4.json':Buffer.from('{"test":true}'),'q4-e4-layer-00.
 const fixture={...original,repository:'example/q4-browser-test',revision:'fixture',files:Object.fromEntries(Object.entries(payload).map(([name,data])=>[name,{bytes:data.length,sha256:createHash('sha256').update(data).digest('hex')}]))};
 const recorded=JSON.parse(await fs.readFile(new URL('./fixtures/english-result.json',import.meta.url)));
 for(const answer of Object.values(recorded.output.response.answers)){delete answer.max_probabilities;delete answer.chunk;}
+recorded.output.response.answers.secret={type:'choice',choice:'none',probabilities:{credential:.1,privatekey:.1,fake:.2,none:.6}};
+const credentialDraft='The login code is 739204.';
 const double=`export async function loadModelInWorker(api,options,controls){
   if(options.backend!=='webgpu'||options.format!=='q4-e4')throw Error('Wrong Q4 configuration');
   if(!options.source.files['q4-e4-layer-00.bin'])throw Error('Wrong checkpoint');
   return {info:{},async createCache(){return {async dispose(){}};},async dispose(){},async predict(request,{signal,cache}){
     if(options.parameters.maxSequenceTokens!==1024||request.long!==undefined||!cache)throw Error('Wrong prediction configuration');
+    const criteria=request.questions.secret.criteria;
+    if(!criteria.credential||['password','token','otp'].some(id=>id in criteria))throw Error('Wrong credential question');
     const draft=request.state.context[1].content;
     if(draft==='too long fixture')throw Object.assign(Error('Input too long'),{code:'INPUT_TOO_LONG'});
     if(draft==='memory limit fixture')throw Object.assign(Error('pplx-flash / webgpu / q4-e4 exceeds device limits'),{code:'RESOURCE_LIMIT'});
     if(draft==='unsupported fixture')throw Object.assign(Error('Selected weight format is unavailable in this build'),{code:'FORMAT_NOT_COMPILED'});
     if(draft==='missing feature fixture')throw Object.assign(Error('pplx-flash / webgpu / q4-e4 requires shader-f16'),{code:'MISSING_GPU_FEATURE'});
     for(let i=1;i<=32;i++){await new Promise(r=>setTimeout(r,draft==='cancel this inference'?200:30));signal.throwIfAborted();controls.onProgress({phase:'inference',completed:i-1,total:32});}
-    return {response:${JSON.stringify(recorded.output.response)},backend:'webgpu',elapsed_ms:123};
+    const response=${JSON.stringify(recorded.output.response)};
+    if(draft===${JSON.stringify(credentialDraft)})response.answers.secret={type:'choice',choice:'credential',probabilities:{credential:.81,privatekey:.04,fake:.05,none:.1}};
+    return {response,backend:'webgpu',elapsed_ms:123};
   }};
 }`;
 const browser=await chromium.launch({executablePath:process.env.PRIVACY_BROWSER_EXECUTABLE,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
@@ -51,6 +57,11 @@ try{
   const raw=JSON.parse(await page.locator('#raw-output').textContent());
   assert.equal(raw.input.state.context[1].content,recorded.draft);assert.equal(Object.hasOwn(raw.input,'long'),false);
   assert.equal(raw.elapsed_ms,123);assert.equal(await page.locator('#runtime-model').innerText(),fixture.name);
+  assert.ok(raw.input.questions.secret.criteria.credential);
+  await page.fill('#message-input',credentialDraft);await page.waitForSelector('#signal-credential');
+  assert.match(await page.locator('#signal-credential').getAttribute('aria-label'),/Access credentials/);
+  assert.equal(await page.locator('#signal-password, #signal-token, #signal-otp').count(),0);
+  assert.equal(await page.locator('#score-credential .score-value').textContent(),'0.810');
   assert.equal(requests.length,2);
   await page.reload();await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
   await page.click('#setup-models [data-model="pplx-flash-q4"] .model-pick');

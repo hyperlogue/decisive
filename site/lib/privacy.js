@@ -9,6 +9,13 @@ export const questions = {
     password:'password or PIN', token:'API key, access token, or session cookie', otp:'one-time verification code',
     privatekey:'private key or wallet recovery phrase', fake:'only a placeholder, example, or public value', none:'no secret value'}},
 };
+const pplxQuestions = {
+  ...questions,
+  secret:{...questions.secret, criteria:{
+    credential:'password, PIN, one-time verification code, API key, access token, or session cookie',
+    privatekey:questions.secret.criteria.privatekey, fake:questions.secret.criteria.fake, none:questions.secret.criteria.none}},
+};
+const questionsFor = engine => engine === 'pplx-q4' ? pplxQuestions : questions;
 export const categories = [
   {id:'name', icon:'person', severity:'mild', question:'name'},
   {id:'birthday', icon:'calendar', severity:'mild', question:'personal'},
@@ -16,29 +23,30 @@ export const categories = [
   {id:'precise', icon:'home', severity:'strong', question:'personal'},
   {id:'financial', icon:'credit', severity:'strong', question:'financial'},
   {id:'identity', icon:'id', severity:'strong', question:'personal'},
-  {id:'password', icon:'lock', severity:'strong', question:'secret'},
-  {id:'token', icon:'key', severity:'strong', question:'secret'},
-  {id:'otp', icon:'otp', severity:'strong', question:'secret'},
+  {id:'credential', icon:'lock', severity:'strong', question:'secret'},
   {id:'privatekey', icon:'keyfile', severity:'strong', question:'secret'},
 ];
 export const threshold = 0.5;
 export const welcome = 'Welcome to the community. Tell us about yourself.';
 
-export function buildRequest(draft) {
+export function buildRequest(draft, engine = 'decima') {
   return {
     state: {
       context: [{role:'assistant', content:welcome}, {role:'user', content:draft}],
     },
-    questions,
+    questions:questionsFor(engine),
   };
 }
 
-export function readScores(response) {
+export function readScores(response, engine = 'decima') {
   return categories.map(c => {
     const answer = response?.answers?.[c.question];
-    const score = answer?.type !== questions[c.question].type ? undefined
-      : answer.type === 'noul' ? answer.noul : (answer.max_probabilities ?? answer.probabilities)?.[c.id];
-    if (!Number.isFinite(score) || score < 0 || score > 1) throw new Error('invalidOutput');
+    if (answer?.type !== questionsFor(engine)[c.question].type) throw new Error('invalidOutput');
+    const options = c.id === 'credential' && engine !== 'pplx-q4' ? ['password','token','otp'] : [c.id];
+    const probabilities = answer.max_probabilities ?? answer.probabilities;
+    const values = answer.type === 'noul' ? [answer.noul] : options.map(id=>probabilities?.[id]);
+    if (values.some(value=>!Number.isFinite(value) || value < 0 || value > 1)) throw new Error('invalidOutput');
+    const score = Math.max(...values);
     return {...c, score, detected:score >= threshold};
   });
 }
