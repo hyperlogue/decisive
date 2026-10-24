@@ -20,6 +20,9 @@ values. It copies only the runtime's configuration/tokenizer and license/notice,
 and generates a model card, release manifest, and `SHA256SUMS`. It refuses to
 overwrite an existing folder. Preparation never contacts Hugging Face.
 
+Pass `--format q8-e8` to package the Q8 release with `export-webgpu-q8`
+instead; its card template is `hf_q8_model_card.md`.
+
 Review `README.md` and `release-manifest.json` in the generated directory. The
 manifest distinguishes upstream provenance from the future Hub release revision.
 The card states the validation scope; a full browser inference/quality run is a

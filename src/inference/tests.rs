@@ -156,6 +156,8 @@ fn unsupported_browser_combinations_identify_selection_and_alternative() {
         ("decima", "webgpu", "int8", "UNSUPPORTED_FORMAT", "f32"),
         ("laya", "wasm", "q4-e4", "UNSUPPORTED_FORMAT", "f32, f16"),
         ("pplx-flash", "wasm", "q4-e4", "UNSUPPORTED_FORMAT", "bf16"),
+        ("pplx-flash", "wasm", "q8-e8", "UNSUPPORTED_FORMAT", "bf16"),
+        ("pplx-flash", "webgpu", "q8", "UNSUPPORTED_FORMAT", "q8-e8"),
     ] {
         let error = support::browser_selection(model, backend, Some(format)).unwrap_err();
         assert_eq!(error.code, code);

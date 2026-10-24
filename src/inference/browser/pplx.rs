@@ -149,34 +149,41 @@ pub(super) struct Runtime {
 }
 impl Runtime {
     pub async fn load(source: Source, config: &Configuration, control: &Control) -> Result<Self> {
-        let packed = match config.format.as_deref() {
-            Some("q4-e4") => true,
-            Some("bf16") | None => false,
+        let format = match config.format.as_deref() {
+            Some(format @ ("q4-e4" | "q8-e8")) => Some(format),
+            Some("bf16") | None => None,
             _ => {
                 return Err(Error::new(
                     "UNSUPPORTED_FORMAT",
-                    "Pplx supports bf16 and q4-e4",
+                    "Pplx supports bf16, q4-e4 and q8-e8",
                 ));
             }
         };
+        let packed = format.is_some();
         let mut manifest = None;
         let names = [
             "model-00001-of-00002.safetensors",
             "model-00002-of-00002.safetensors",
         ];
         let mut headers = Vec::new();
-        if packed {
-            let value: Packed = serde_json::from_slice(&source.read("packed-q4-e4.json").await?)
-                .map_err(Error::engine)?;
+        if let Some(format) = format {
+            let (scheme, row_bytes) = if format == "q4-e4" {
+                ("q4-w4a8-e4-r4-g64", 1440)
+            } else {
+                ("q8-w8a8-e8-r8-g64", 2720)
+            };
+            let value: Packed =
+                serde_json::from_slice(&source.read(&format!("packed-{format}.json")).await?)
+                    .map_err(Error::engine)?;
             if value.schema_version != 1
-                || value.scheme != "q4-w4a8-e4-r4-g64"
+                || value.scheme != scheme
                 || value.layers.len() != 32
                 || value.headers.len() != 2
-                || value.embedding_row_bytes != 1440
+                || value.embedding_row_bytes != row_bytes
             {
                 return Err(Error::new(
                     "INVALID_CHECKPOINT",
-                    "Invalid packed Q4-E4 manifest",
+                    format!("Invalid packed {} manifest", format.to_uppercase()),
                 ));
             }
             headers = value.headers.clone();
@@ -236,7 +243,7 @@ impl Runtime {
                     &tokenizer,
                     &readout,
                     &serde_json::to_string(&headers).unwrap(),
-                    "q4-e4",
+                    format.unwrap(),
                     false,
                     tuning,
                     Some(config.tuning.budget_ms),
@@ -249,7 +256,7 @@ impl Runtime {
             {
                 return Err(Error::new(
                     "UNSUPPORTED_FORMAT",
-                    "Build with pplx-webgpu for Q4",
+                    "Build with pplx-webgpu for packed weights",
                 ));
             }
         } else {
@@ -304,7 +311,7 @@ impl Runtime {
             let (mut ranges, layer_file): (Vec<Range>, Option<String>) =
                 if let Some(manifest) = &manifest {
                     let item = &manifest.layers[layer];
-                    if item.file != format!("q4-e4-layer-{layer:02}.bin") {
+                    if item.file != format!("{}-layer-{layer:02}.bin", format.unwrap()) {
                         return Err(Error::new(
                             "INVALID_CHECKPOINT",
                             "Unexpected layer filename",

@@ -94,6 +94,12 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(reference_group(bf16), bytes([0x1F, 0x88, 0x6A, 0x6A] * 8) + struct.pack('<f', 1.))
         self.assertEqual(reference_group(bytes(128)), bytes([0x88] * 32) + struct.pack('<f', 2**-126))
 
+    def test_q8_reference_uses_signed_bytes(self):
+        values = [127., -127., .5, -.5, 1.5, -1.5, 2.5, -2.5] * 8
+        bf16 = b''.join(struct.pack('<f', n)[2:] for n in values)
+        self.assertEqual(reference_group(bf16, 127), bytes([127, 129, 0, 0, 2, 254, 2, 254] * 8) + struct.pack('<f', 1.))
+        self.assertEqual(reference_group(bytes(128), 127), bytes(64) + struct.pack('<f', 2**-126))
+
 
 if __name__ == '__main__':
     unittest.main()

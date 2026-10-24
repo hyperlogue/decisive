@@ -12,7 +12,13 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = json.loads((ROOT / 'examples/pplx-flash/model.json').read_text())
-SCHEME = 'q4-w4a8-e4-r4-g64'
+FORMATS = {
+    'q4-e4': {'scheme': 'q4-w4a8-e4-r4-g64', 'group_bytes': 36, 'limit': 7, 'export': 'export-webgpu-q4',
+              'features': ['pplx-flash', 'wasm', 'webgpu', 'kernel-checks']},
+    'q8-e8': {'scheme': 'q8-w8a8-e8-r8-g64', 'group_bytes': 68, 'limit': 127, 'export': 'export-webgpu-q8',
+              'features': ['pplx-flash', 'wasm', 'webgpu', 'pplx-webgpu']},
+}
+SCHEME = FORMATS['q4-e4']['scheme']
 SUPPORT = ['config.json', 'decision_config.json', 'joint_config.json', 'tokenizer.json', 'LICENSE', 'NOTICE']
 SHARDS = ['model-00001-of-00002.safetensors', 'model-00002-of-00002.safetensors']
 
@@ -49,18 +55,25 @@ def header(path):
         return f.read(length).decode()
 
 
-def packed_size(shape):
+def packed_size(shape, group_bytes=36):
     if len(shape) == 2:
         require(shape[1] % 64 == 0, 'Matrix width is not a multiple of 64')
-        return math.prod(shape) // 64 * 36
+        return math.prod(shape) // 64 * group_bytes
     return math.prod(shape) * 2
 
 
-def validate_packed(directory):
-    manifest = json.loads(checked_file(directory, 'packed-q4-e4.json').read_text())
-    require(manifest['schema_version'] == 1 and manifest['scheme'] == SCHEME, 'Unsupported packed format')
+def detect_format(directory):
+    found = [name for name in FORMATS if (directory / f'packed-{name}.json').exists()]
+    require(len(found) == 1, 'Expected exactly one packed manifest')
+    return found[0]
+
+
+def validate_packed(directory, format='q4-e4'):
+    group = FORMATS[format]['group_bytes']
+    manifest = json.loads(checked_file(directory, f'packed-{format}.json').read_text())
+    require(manifest['schema_version'] == 1 and manifest['scheme'] == FORMATS[format]['scheme'], 'Unsupported packed format')
     require(manifest['revision'] == SOURCE['revision'], 'Wrong source revision')
-    require((manifest['group_size'], manifest['group_bytes'], manifest['embedding_row_bytes']) == (64, 36, 1440), 'Wrong group layout')
+    require((manifest['group_size'], manifest['group_bytes'], manifest['embedding_row_bytes']) == (64, group, 40 * group), 'Wrong group layout')
     require(len(manifest['layers']) == 32 and len(manifest['headers']) == 2, 'Incomplete checkpoint')
     tensors = {}
     for source_header in manifest['headers']:
@@ -72,9 +85,9 @@ def validate_packed(directory):
     expected_files = set()
     decoder_bytes = 0
     for index, layer in enumerate(manifest['layers']):
-        name = f'q4-e4-layer-{index:02}.bin'
-        require(layer['file'] == name, 'Wrong layer filename/order')
-        expected_files.add(name)
+        filename = f'{format}-layer-{index:02}.bin'
+        require(layer['file'] == filename, 'Wrong layer filename/order')
+        expected_files.add(filename)
         expected_tensors = {n for n in tensors if n.startswith(f'language_model.layers.{index}.')}
         seen, position = set(), 0
         for tensor in layer['tensors']:
@@ -82,20 +95,20 @@ def validate_packed(directory):
             require(key in expected_tensors and key not in seen, 'Unknown or repeated tensor')
             seen.add(key)
             require(tensor['shape'] == tensors[key]['shape'], 'Tensor shape mismatch')
-            require(tensor['start'] == position and tensor['end'] - position == packed_size(tensor['shape']), 'Invalid tensor range')
+            require(tensor['start'] == position and tensor['end'] - position == packed_size(tensor['shape'], group), 'Invalid tensor range')
             position = tensor['end']
         require(seen == expected_tensors and seen, 'Missing layer tensors')
-        require(position == layer['bytes'] == manifest['files'][name]['bytes'], 'Layer size mismatch')
+        require(position == layer['bytes'] == manifest['files'][filename]['bytes'], 'Layer size mismatch')
         decoder_bytes += position
     require(decoder_bytes == manifest['decoder_bytes'], 'Decoder total mismatch')
     auxiliary = {
-        'embedding': ('q4-e4-embedding.bin', packed_size(tensors['language_model.embed_tokens.weight']['shape'])),
-        'readout': ('q4-e4-readout.bin', packed_size([255, 2560])),
-        'norm': ('q4-e4-norm.bin', 2560 * 2),
+        'embedding': (f'{format}-embedding.bin', packed_size(tensors['language_model.embed_tokens.weight']['shape'], group)),
+        'readout': (f'{format}-readout.bin', packed_size([255, 2560], group)),
+        'norm': (f'{format}-norm.bin', 2560 * 2),
     }
-    for key, (name, size) in auxiliary.items():
-        require(manifest[key] == name and manifest['files'][name]['bytes'] == size, f'Invalid {key} payload')
-        expected_files.add(name)
+    for key, (filename, size) in auxiliary.items():
+        require(manifest[key] == filename and manifest['files'][filename]['bytes'] == size, f'Invalid {key} payload')
+        expected_files.add(filename)
     require(set(manifest['files']) == expected_files, 'Unexpected packed files')
     verify_files(directory, manifest['files'])
     return manifest
@@ -105,17 +118,21 @@ def f32(value):
     return struct.unpack('<f', struct.pack('<f', value))[0]
 
 
-def reference_group(raw):
+def reference_group(raw, limit=7):
 
     values = [struct.unpack('<f', b'\0\0' + raw[i:i + 2])[0] for i in range(0, 128, 2)]
     require(len(raw) == 128 and all(math.isfinite(v) for v in values), 'Invalid BF16 group')
-    scale = max(f32(max(abs(v) for v in values) / 7), 2 ** -126)
+    scale = max(f32(max(abs(v) for v in values) / limit), 2 ** -126)
     inverse = f32(1 / scale)
-    codes = [max(-7, min(7, round(f32(v * inverse)))) + 8 for v in values]
+    codes = [max(-limit, min(limit, round(f32(v * inverse)))) for v in values]
+    if limit == 127:
+        return bytes(c & 255 for c in codes) + struct.pack('<f', scale)
+    codes = [c + 8 for c in codes]
     return bytes(a | b << 4 for a, b in zip(codes[::2], codes[1::2])) + struct.pack('<f', scale)
 
 
-def verify_samples(source, directory, manifest):
+def verify_samples(source, directory, manifest, format='q4-e4'):
+    group_bytes, limit = FORMATS[format]['group_bytes'], FORMATS[format]['limit']
     sources = {}
     for name, text in zip(SHARDS, manifest['headers']):
         require(header(source / name) == text, 'Exported headers differ from source')
@@ -132,8 +149,8 @@ def verify_samples(source, directory, manifest):
                 groups = math.prod(shape) // 64
                 for group in sorted({0, groups // 2, groups - 1}):
                     original.seek(source_offset + group * 128)
-                    packed.seek(start + group * 36)
-                    require(packed.read(36) == reference_group(original.read(128)), f'Q4 sample mismatch: {name}, group {group}')
+                    packed.seek(start + group * group_bytes)
+                    require(packed.read(group_bytes) == reference_group(original.read(128), limit), f'Packed sample mismatch: {name}, group {group}')
                     checked += 1
             else:
                 size = math.prod(shape) * 2
@@ -165,24 +182,25 @@ def prepare(args):
     require(not out.exists(), 'Output already exists; choose a new directory')
     print('Verifying pinned source files…', flush=True)
     verify_files(source, SOURCE['files'])
-    subprocess.run([str(args.exporter.resolve()), 'pplx-flash', '--model', str(source), 'export-webgpu-q4', '--output', str(out)], check=True)
-    manifest = validate_packed(out)
-    samples = verify_samples(source, out, manifest)
+    format = args.format
+    subprocess.run([str(args.exporter.resolve()), 'pplx-flash', '--model', str(source), FORMATS[format]['export'], '--output', str(out)], check=True)
+    manifest = validate_packed(out, format)
+    samples = verify_samples(source, out, manifest, format)
     for name in SUPPORT:
         shutil.copyfile(source / name, out / name)
-    files = {**manifest['files'], **{name: spec(out / name) for name in ['packed-q4-e4.json', *SUPPORT]}}
+    files = {**manifest['files'], **{name: spec(out / name) for name in [f'packed-{format}.json', *SUPPORT]}}
     files = dict(sorted(files.items()))
     total = sum(f['bytes'] for f in files.values())
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    template = (Path(__file__).with_name('hf_q4_model_card.md')).read_text()
+    template = (Path(__file__).with_name(f'hf_{format[:2]}_model_card.md')).read_text()
     card = template.replace('{{SOURCE_REVISION}}', SOURCE['revision']).replace('{{RUNTIME_REVISION}}', commit)
     card = card.replace('{{TOTAL_BYTES}}', f'{total:,}').replace('{{TOTAL_GB}}', f'{total / 1e9:.3f}').replace('{{TOTAL_GIB}}', f'{total / 2**30:.3f}')
     card = card.replace('{{SAMPLE_CHECKS}}', str(samples))
     (out / 'README.md').write_text(card)
     release = {
-        'schema_version': 1, 'format': SCHEME,
+        'schema_version': 1, 'format': FORMATS[format]['scheme'],
         'source': {'repository': SOURCE['repository'], 'revision': SOURCE['revision'], 'files': SOURCE['files']},
-        'runtime': {'repository': 'https://github.com/hyperlogue/dicisive', 'revision': commit, 'mode': 'q4-e4', 'features': ['pplx-flash', 'wasm', 'webgpu', 'kernel-checks']},
+        'runtime': {'repository': 'https://github.com/hyperlogue/dicisive', 'revision': commit, 'mode': format, 'features': FORMATS[format]['features']},
         'validation': {'source_sha256': True, 'packed_sha256': True, 'layout': True, 'sample_checks': samples, 'full_inference': False},
         'download': {'total_bytes': total, 'files': files},
     }
@@ -195,11 +213,12 @@ def prepare(args):
 
 def verify(args):
     out = args.output.resolve()
-    manifest = validate_packed(out)
+    format = detect_format(out)
+    manifest = validate_packed(out, format)
     release = json.loads(checked_file(out, 'release-manifest.json').read_text())
     require(release['source'] == {**SOURCE}, 'Source provenance mismatch')
     files = release['download']['files']
-    require(set(files) == set(manifest['files']) | set(SUPPORT) | {'packed-q4-e4.json'}, 'Incomplete download catalog')
+    require(set(files) == set(manifest['files']) | set(SUPPORT) | {f'packed-{format}.json'}, 'Incomplete download catalog')
     require(all(files[name] == value for name, value in manifest['files'].items()), 'Download/packed checksum mismatch')
     require(all(files[name] == SOURCE['files'][name] for name in SUPPORT), 'Modified source metadata/license')
     require(release['download']['total_bytes'] == sum(v['bytes'] for v in files.values()), 'Download total mismatch')
@@ -219,12 +238,13 @@ def verify(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Prepare/verify an upload directory using the unchanged Decisive Q4 exporter.')
+    parser = argparse.ArgumentParser(description='Prepare/verify an upload directory using the unchanged Decisive packed exporter.')
     commands = parser.add_subparsers(dest='command', required=True)
     p = commands.add_parser('prepare', help='Verify, export, and package locally; never uploads')
     p.add_argument('--source', type=Path, default=ROOT / 'models/pplx-decider-flash-v1.2')
     p.add_argument('--exporter', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--format', choices=sorted(FORMATS), default='q4-e4')
     p.set_defaults(run=prepare)
     v = commands.add_parser('verify', help='Verify an existing upload folder')
     v.add_argument('--output', type=Path, required=True)

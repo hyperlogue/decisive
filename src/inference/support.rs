@@ -36,7 +36,7 @@ pub(crate) fn browser_selection(model: &str, backend: &str, format: Option<&str>
     let formats: &[&str] = match (model, backend) {
         ("decima", "wasm") => &["f32", "int8", "int8-weights", "int8-full", "int8-compact"],
         ("laya", _) => &["f32", "f16"],
-        ("pplx-flash", "webgpu") => &["bf16", "q4-e4"],
+        ("pplx-flash", "webgpu") => &["bf16", "q4-e4", "q8-e8"],
         ("pplx-flash", "wasm") => &["bf16"],
         _ => &["f32"],
     };
@@ -68,7 +68,7 @@ pub(crate) fn browser_selection(model: &str, backend: &str, format: Option<&str>
         return Err(Error::new("BACKEND_NOT_COMPILED", message));
     }
     let feature = match (model, format) {
-        ("pplx-flash", "q4-e4")
+        ("pplx-flash", "q4-e4" | "q8-e8")
             if !cfg!(any(feature = "pplx-webgpu", feature = "kernel-checks")) =>
         {
             Some("pplx-webgpu")
@@ -112,7 +112,7 @@ pub(crate) fn load_error(
     let format = format.unwrap_or(if model == "pplx-flash" { "bf16" } else { "f32" });
     let selection = format!("{model} / {backend} / {format}");
     error.message = match error.code.as_str() {
-        "MISSING_GPU_FEATURE" if model == "pplx-flash" && format == "q4-e4" => format!(
+        "MISSING_GPU_FEATURE" if model == "pplx-flash" && format != "bf16" => format!(
             "{selection} requires shader-f16, which this browser or GPU does not provide. Choose Decima with WebGPU/f32, or use a browser/device with shader-f16."
         ),
         "GPU_UNAVAILABLE" => format!(
