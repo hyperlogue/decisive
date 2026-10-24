@@ -21,7 +21,7 @@ try{
  assert.doesNotMatch(await page.locator('#setup-dialog').textContent(),/This page requires WebGPU to work/);
  assert.match(await page.locator('#setup-models [data-model="pplx-flash-q4"] .model-link').getAttribute('href'),/^https:\/\/huggingface\.co\/rickye26\/pplx-decider-flash-v1\.2-q4\/tree\//);
  assert.match(await page.locator('#setup-models [data-model="decima-small"] .model-option-size').textContent(),/506.7 MB/);
- assert.equal(await page.locator('#setup-models .model-option').count(),2);
+ assert.equal(await page.locator('#setup-models .model-option').count(),3);
  assert.equal(await page.locator('#setup-dialog select, #skip-setup').count(),0);
  assert.equal(await page.locator('#start-analysis').isDisabled(),true);
  assert.equal(await page.locator('#setup-models [data-model="decima-small"] .model-download').isVisible(),true);
@@ -31,7 +31,9 @@ try{
  assert.equal(await page.locator('#setup-download, #setup-pause').count(),0);
  const q4Card='#setup-models [data-model="pplx-flash-q4"]';
 await page.waitForSelector(`${q4Card}.blocked`);
-assert.equal(await page.locator('#setup-models .model-option.blocked').count(),1);
+assert.equal(await page.locator('#setup-models .model-option.blocked').count(),2);
+assert.equal(await page.locator('#setup-models [data-model="pplx-flash-q8"].blocked .model-option-name').textContent(),'pplx-decider-flash-v1.2-q8');
+assert.match(await page.locator('#setup-models [data-model="pplx-flash-q8"] .model-link').getAttribute('href'),/^https:\/\/huggingface\.co\/rickye26\/pplx-decider-flash-v1\.2-q8\/tree\/10e640e/);
 assert.equal(await page.locator(`${q4Card} .model-badge`).innerText(),'Disabled');
 assert.equal(await page.locator(`${q4Card} .model-tip`).isVisible(),false);
 await page.hover(`${q4Card} .model-badge`);

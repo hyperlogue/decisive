@@ -23,6 +23,15 @@ test('both models pin their release and exact download size; unpublished entries
   assert.throws(()=>requirePublished({...q4,available:false}),/modelComingSoon/);
   assert.throws(()=>requirePublished({...q4,repository:null}),/modelComingSoon/);
   assert.notEqual(q4.storeName,decima.storeName);
+  const q8=requirePublished(selectModel(catalog,'pplx-flash-q8'));
+  assert.match(q8.revision,/^[a-f0-9]{40}$/);
+  assert.equal(q8.engine,'pplx-q8');
+  assert.equal(emptyModelState(q8).total,4490404034);
+  assert.equal(Object.keys(q8.files).length,42);
+  assert.equal(Object.keys(q8.files).filter(name=>/^q8-e8-layer-/.test(name)).length,32);
+  assert.ok(Object.values(q8.files).every(f=>f.bytes>0&&/^[a-f0-9]{64}$/.test(f.sha256)));
+  assert.deepEqual(q8.requiredFeatures,['shader-f16']);
+  assert.equal(new Set(catalog.models.map(m=>m.storeName)).size,catalog.models.length);
 });
 
 test('a stale worker cannot attach Pplx size or files to Decima',async()=>{

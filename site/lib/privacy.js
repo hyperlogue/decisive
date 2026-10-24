@@ -15,7 +15,8 @@ const pplxQuestions = {
     credential:'password, PIN, one-time verification code, API key, access token, or session cookie',
     privatekey:questions.secret.criteria.privatekey, fake:questions.secret.criteria.fake, none:questions.secret.criteria.none}},
 };
-const questionsFor = engine => engine === 'pplx-q4' ? pplxQuestions : questions;
+const isPplx = engine => engine?.startsWith('pplx-');
+const questionsFor = engine => isPplx(engine) ? pplxQuestions : questions;
 export const categories = [
   {id:'name', icon:'person', severity:'mild', question:'name'},
   {id:'birthday', icon:'calendar', severity:'mild', question:'personal'},
@@ -42,7 +43,7 @@ export function readScores(response, engine = 'decima') {
   return categories.map(c => {
     const answer = response?.answers?.[c.question];
     if (answer?.type !== questionsFor(engine)[c.question].type) throw new Error('invalidOutput');
-    const options = c.id === 'credential' && engine !== 'pplx-q4' ? ['password','token','otp'] : [c.id];
+    const options = c.id === 'credential' && !isPplx(engine) ? ['password','token','otp'] : [c.id];
     const probabilities = answer.max_probabilities ?? answer.probabilities;
     const values = answer.type === 'noul' ? [answer.noul] : options.map(id=>probabilities?.[id]);
     if (values.some(value=>!Number.isFinite(value) || value < 0 || value > 1)) throw new Error('invalidOutput');

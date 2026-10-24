@@ -10,7 +10,7 @@ export function inferenceErrorKey(code: string | undefined, engine?: string): st
     case 'GPU_UNAVAILABLE': return 'webgpuUnavailable';
     case 'RESOURCE_LIMIT': return 'modelMemoryLimit';
     case 'CANCELLED': return 'paused';
-    case 'INPUT_TOO_LONG': return engine === 'pplx-q4' ? 'pplxInputTooLong' : 'inputTooLong';
+    case 'INPUT_TOO_LONG': return engine?.startsWith('pplx-') ? 'pplxInputTooLong' : 'inputTooLong';
     default: return undefined;
   }
 }

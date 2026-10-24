@@ -71,6 +71,8 @@ test('one credential category preserves Decima alerts without summing scores',()
 test('Pplx reads its merged option and rejects a response from the wrong question setup',()=>{
   const response=responseFor('pplx-q4');response.answers.secret.probabilities.credential=.64;
   assert.equal(readScores(response,'pplx-q4').find(s=>s.id==='credential').score,.64);
+  assert.equal(readScores(response,'pplx-q8').find(s=>s.id==='credential').score,.64);
+  assert.deepEqual(buildRequest('x','pplx-q8'),buildRequest('x','pplx-q4'));
   assert.throws(()=>readScores(response),/invalidOutput/);
   assert.throws(()=>readScores(responseFor(),'pplx-q4'),/invalidOutput/);
   delete response.answers.secret.probabilities.credential;

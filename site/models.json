@@ -221,6 +221,188 @@
       "requiredFeatures": [
         "shader-f16"
       ]
+    },
+    {
+      "id": "pplx-flash-q8",
+      "name": "pplx-decider-flash-v1.2-q8",
+      "engine": "pplx-q8",
+      "available": true,
+      "storeName": "decisive-privacy-pplx-q8-v1",
+      "repository": "rickye26/pplx-decider-flash-v1.2-q8",
+      "revision": "10e640e6566ff93708ef61b83f1b3dd7c06182aa",
+      "files": {
+        "LICENSE": {
+          "bytes": 11544,
+          "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+        },
+        "NOTICE": {
+          "bytes": 132,
+          "sha256": "381fb81e814716a5ef8e5eae26a08607d052cf12f019dba9da9e81298ef5cb75"
+        },
+        "config.json": {
+          "bytes": 2898,
+          "sha256": "1bdb718faa99e32673f1622ea2f536affe20867bcb4703888aac9a030ec59e22"
+        },
+        "decision_config.json": {
+          "bytes": 5435,
+          "sha256": "6d59a4e66f459596cad6f3ff932c635e379f1dc1c49819357869de8abe01722f"
+        },
+        "joint_config.json": {
+          "bytes": 248,
+          "sha256": "ecc88efc2a8ebd81ddf93f7d722e35b2829fd7526b5ce754db53395aa49fb510"
+        },
+        "packed-q8-e8.json": {
+          "bytes": 188493,
+          "sha256": "d19fac44cf9f46211955732246f987c04cdd122e3c13521abcae4041e32b4243"
+        },
+        "q8-e8-embedding.bin": {
+          "bytes": 675430400,
+          "sha256": "0bfeda98573052fd964177e37433c6d00699d8bb0aa19d38787cb27706224241"
+        },
+        "q8-e8-layer-00.bin": {
+          "bytes": 120017280,
+          "sha256": "09819922878ff8dc1cdee5a337412f95646afe3db467826ea00aaed52c6cabd4"
+        },
+        "q8-e8-layer-01.bin": {
+          "bytes": 120017280,
+          "sha256": "c4088a965dea1d35686bf7033634d0bf2939a56264f6764b505ed9ee1d349139"
+        },
+        "q8-e8-layer-02.bin": {
+          "bytes": 120017280,
+          "sha256": "148d2bc65e8dfa954728f11bbc72972d759c1c52807cfe8c3db928eece48d69c"
+        },
+        "q8-e8-layer-03.bin": {
+          "bytes": 114207744,
+          "sha256": "283e0cd3b571a8fd070806f450ac37c577e2a849a3e7f347de3c7863bbd7c4c2"
+        },
+        "q8-e8-layer-04.bin": {
+          "bytes": 120017280,
+          "sha256": "1ad117717359ce38ed801b5ef1939a815934334d435b051bc1f248be7f0e4e4b"
+        },
+        "q8-e8-layer-05.bin": {
+          "bytes": 120017280,
+          "sha256": "1d11080e19b49be80d1596b0251957ce4051199e4b02fae9bf58c8a3b2a75b79"
+        },
+        "q8-e8-layer-06.bin": {
+          "bytes": 120017280,
+          "sha256": "2d537aaaeeb41f275ca272eea85dcdc74cfc8ac6fae0f018101fbc24cb53c60b"
+        },
+        "q8-e8-layer-07.bin": {
+          "bytes": 114207744,
+          "sha256": "ff265a18700d9fddcec8c6e6dda743c9f51fccdd7055493f68a91115c20bf898"
+        },
+        "q8-e8-layer-08.bin": {
+          "bytes": 120017280,
+          "sha256": "df7caff725205dce9e0d4ad51fa40b33b88a880c8f0f37a99ad6883b60e51a49"
+        },
+        "q8-e8-layer-09.bin": {
+          "bytes": 120017280,
+          "sha256": "a2c3d28ad2d3113218fbd63aeed2046173e5484f0d80bfa35f62962a0c1c1a93"
+        },
+        "q8-e8-layer-10.bin": {
+          "bytes": 120017280,
+          "sha256": "89c68592ea1759ca11aa2010a5412b599166531d7edb71557f61d6173fbf47b5"
+        },
+        "q8-e8-layer-11.bin": {
+          "bytes": 114207744,
+          "sha256": "ae8071216bfdeffecc477c7fdea4c61fabb427b94cfd4ed14dd265d54fe9f9ea"
+        },
+        "q8-e8-layer-12.bin": {
+          "bytes": 120017280,
+          "sha256": "96e4f63aa124e552f528be5bdad4f069ab23e75609aff7bb62919348dee3f604"
+        },
+        "q8-e8-layer-13.bin": {
+          "bytes": 120017280,
+          "sha256": "9bfe7a18b0d76e307e2d584b3807607498ffe8bf35590241fdf6334f59da5065"
+        },
+        "q8-e8-layer-14.bin": {
+          "bytes": 120017280,
+          "sha256": "b510cc0e98b5b1d38977f07cf1410fd5a9bdbccda733af8f7f2311e7d1090e21"
+        },
+        "q8-e8-layer-15.bin": {
+          "bytes": 114207744,
+          "sha256": "138bc968bdb840e30952d4902d10cd868b9ef17f6bde7321482795c12d44a5d1"
+        },
+        "q8-e8-layer-16.bin": {
+          "bytes": 120017280,
+          "sha256": "93052fb1cc36b6873496c114ba3659951256393620dde5d98c94b2b2ddc02838"
+        },
+        "q8-e8-layer-17.bin": {
+          "bytes": 120017280,
+          "sha256": "eb3213b76cd15fa3c05aa4c8d722a1659e585f77bae12515e9c9d84adf0af7e3"
+        },
+        "q8-e8-layer-18.bin": {
+          "bytes": 120017280,
+          "sha256": "be20e773d4e436d5c77fe4bf397eea417da084abcca2bc09b45c8f87b2f5c909"
+        },
+        "q8-e8-layer-19.bin": {
+          "bytes": 114207744,
+          "sha256": "1803ac4229a757e89c88ea6a381bbab3c016b63928c92f1d039a03a4eac9895c"
+        },
+        "q8-e8-layer-20.bin": {
+          "bytes": 120017280,
+          "sha256": "47b501649be08da9da5b85367894ec655cbadab6ee074f64dc36257961e878b0"
+        },
+        "q8-e8-layer-21.bin": {
+          "bytes": 120017280,
+          "sha256": "16df6616e392d2c36f8474d19b7d3443252d1594ee7a063bdff2a9f7ddf413b3"
+        },
+        "q8-e8-layer-22.bin": {
+          "bytes": 120017280,
+          "sha256": "b3279a4b64cfd49c86ddfc041e76ac67688637e065cc590a4fc70aa51bba00bc"
+        },
+        "q8-e8-layer-23.bin": {
+          "bytes": 114207744,
+          "sha256": "f14a08d20d0f23bfc40c14b4dbd737216d6cddae045edaca7e67f5b7855fc715"
+        },
+        "q8-e8-layer-24.bin": {
+          "bytes": 120017280,
+          "sha256": "410d16477fbe020e4199750ccc273fcef573e98496daf58b4c0ab06a198886cc"
+        },
+        "q8-e8-layer-25.bin": {
+          "bytes": 120017280,
+          "sha256": "4f8392ccdc660b683a387b8bc3bc4ecbdb4c906f88f64c78d04f4fc704987f8c"
+        },
+        "q8-e8-layer-26.bin": {
+          "bytes": 120017280,
+          "sha256": "2766a8b93d81e1634d893b8b29c4ec8aeb7955474e64c2b6340308a7bccef77e"
+        },
+        "q8-e8-layer-27.bin": {
+          "bytes": 114207744,
+          "sha256": "a3d076e0a9a1dce8b2119c3af4ef520f7bb9b2d0c6577ee327577e830ab61ebe"
+        },
+        "q8-e8-layer-28.bin": {
+          "bytes": 120017280,
+          "sha256": "0c17cb024b85407e0600d8b79fc64bd60ab831643b34602fd8ad922890a39a4e"
+        },
+        "q8-e8-layer-29.bin": {
+          "bytes": 120017280,
+          "sha256": "23db464c13973246bdecf91cb61a5e76580e88d77a521ce813a400451663fbed"
+        },
+        "q8-e8-layer-30.bin": {
+          "bytes": 120017280,
+          "sha256": "a222536384b69001adfa2afe3ca8f195985187e8f408343c51b424ade6c59549"
+        },
+        "q8-e8-layer-31.bin": {
+          "bytes": 114207744,
+          "sha256": "bb4f815fcafb2f51cd2232fc7e30b61cdbb93a704a3e6dd109d44153ace31cbe"
+        },
+        "q8-e8-norm.bin": {
+          "bytes": 5120,
+          "sha256": "96294c653d4e8ab158cdae0b7e794559654ffdc62db880725ed714d47f708621"
+        },
+        "q8-e8-readout.bin": {
+          "bytes": 693600,
+          "sha256": "f601c8203feed2552bea8d7582558cdd61c6604acbf9d6e306d190b4dd60c712"
+        },
+        "tokenizer.json": {
+          "bytes": 19989492,
+          "sha256": "6f32ce20dc35f57a7f9ad1eac03525bd7d30f9df8cea6507e958279cc3657706"
+        }
+      },
+      "requiredFeatures": [
+        "shader-f16"
+      ]
     }
   ]
 }

@@ -13,7 +13,14 @@ test('unsupported selections and build features keep actionable messages',()=>{
 test('cancellation and context errors stay distinct from unknown failures',()=>{
   assert.equal(inferenceErrorKey('CANCELLED'),'paused');
   assert.equal(inferenceErrorKey('INPUT_TOO_LONG','pplx-q4'),'pplxInputTooLong');
+  assert.equal(inferenceErrorKey('INPUT_TOO_LONG','pplx-q8'),'pplxInputTooLong');
   assert.equal(inferenceErrorKey('INPUT_TOO_LONG','decima'),'inputTooLong');
   assert.equal(inferenceErrorKey('INFERENCE_FAILED'),undefined);
   assert.equal(inferenceErrorKey(undefined),undefined);
+});
+test('each Pplx catalog engine selects its packed weight format',async()=>{
+  const {inferenceConfig}=await import('../.compiled/lib/inference-config.js');
+  assert.equal(inferenceConfig({engine:'pplx-q4'},{}).format,'q4-e4');
+  assert.equal(inferenceConfig({engine:'pplx-q8'},{}).format,'q8-e8');
+  assert.equal(inferenceConfig({engine:'pplx-q8'},{}).parameters.maxSequenceTokens,1024);
 });
