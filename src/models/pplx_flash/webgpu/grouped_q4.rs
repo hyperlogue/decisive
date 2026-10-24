@@ -181,10 +181,42 @@ fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_id) l:vec3<
     s + "}"
 }
 
+// Rewrites a grouped Q4 kernel for group-64 Q8 weights, stored like the activations: 16 words of
+// signed bytes and an f32 scale per group. Only the weight tile load changes; every group dot is
+// still an exact integer in f32, so the per-output fma order and the outputs' rounding are kept.
+pub(super) fn q8_weights(source: &str) -> String {
+    let header = "let r=i/8u;let c=i%8u;";
+    let at = source.find(header).expect("grouped Q4 weight loop");
+    let start = source[..at].rfind("\n").unwrap() + 1;
+    let end = at + source[at..].find("\n }\n").expect("grouped Q4 weight loop end") + 4;
+    let bounds = &source[start..at];
+    let number = |prefix: &str| -> usize {
+        let from = bounds.find(prefix).expect("grouped Q4 weight loop bounds") + prefix.len();
+        bounds[from..from + bounds[from..].find('u').unwrap()].parse().unwrap()
+    };
+    // The Q4 loop covers 8 words per weight row of the tile.
+    let (n, threads) = (number("lane;i<") / 8, number("i+="));
+    let up = source[start..end].contains("ut[");
+    let (zero, load) = if up {
+        (format!("bt[c*{n}u+r]=vec4<f16>(0.0h);ut[c*{n}u+r]=vec4<f16>(0.0h);"),
+         format!("bt[c*{n}u+r]=unpack_a(w[o]);ut[c*{n}u+r]=unpack_a(u[o]);"))
+    } else {
+        (format!("bt[c*{n}u+r]=vec4<f16>(0.0h);"), format!("bt[c*{n}u+r]=unpack_a(w[o]);"))
+    };
+    let tile = format!(
+        " for(var i=lane;i<{}u;i+={threads}u){{let r=i/16u;let c=i%16u;{zero}\n  if(g.x*{n}u+r<n){{let o=((g.x*{n}u+r)*groups+group)*17u+c;{load}}}\n }}\n",
+        n * 16
+    );
+    let s = format!("{}{tile}{}", &source[..start], &source[end..]).replace("*9u+8u", "*17u+16u");
+    assert!(!s.contains("*9u") && s.contains("fn unpack_a("), "unconverted grouped Q4 weight access");
+    s
+}
+
 pub(crate) async fn check() -> Result<serde_json::Value> {
     let mut checks = Vec::new();
     let mut baseline = Vec::<Vec<f32>>::new();
-    for (variant, mode) in ["q4-e4-signed", "q4-e4-int8", "q4-e4-baseline", "q4-e4"].into_iter().enumerate() {
+    for (variant, mode) in ["q4-e4-signed", "q4-e4-int8", "q4-e4-baseline", "q4-e4", "q8-e8"].into_iter().enumerate() {
+        let bits = if mode == "q8-e8" { 8 } else { 4 };
         let gpu = Gpu::checkpoint(mode, false).await?;
         for (case, (m, n, k)) in [(1, 7, 64), (5, 67, 128), (65, 33, 256), (7, 11, 192), (3, 5, 128)]
             .into_iter()
@@ -216,7 +248,14 @@ pub(crate) async fn check() -> Result<serde_json::Value> {
                 .iter()
                 .flat_map(|v| ((v.to_bits() >> 16) as u16).to_le_bytes())
                 .collect();
-            let packed = crate::pplx_flash::packed_q4::pack(&raw, n, k)?;
+            let packed = crate::pplx_flash::packed::pack(&raw, n, k, bits)?;
+            // Symmetric codes of |b| are |codes|, so projecting |a| onto them bounds the summed
+            // magnitude of the group terms that the GPU's fma accumulation rounds.
+            let raw_abs: Vec<u8> = b
+                .iter()
+                .flat_map(|v| ((v.abs().to_bits() >> 16) as u16).to_le_bytes())
+                .collect();
+            let packed_abs = crate::pplx_flash::packed::pack(&raw_abs, n, k, bits)?;
             let ab = gpu.device.buffer(&a, "grouped activations")?;
             let wb = gpu.device.bytes(&packed, "grouped Q4 weights")?;
             let mut encoder = gpu.device.encoder();
@@ -224,7 +263,7 @@ pub(crate) async fn check() -> Result<serde_json::Value> {
             let actual = gpu.device.read(encoder, &out, m * n).await?;
             if variant == 0 {
                 baseline.push(actual.clone());
-            } else {
+            } else if bits == 4 {
                 let maximum = actual
                     .iter()
                     .zip(&baseline[case])
@@ -237,18 +276,23 @@ pub(crate) async fn check() -> Result<serde_json::Value> {
             }
             let mut maximum = 0f32;
             for row in 0..m {
-                let expected = crate::pplx_flash::packed_q4::project(
+                let expected = crate::pplx_flash::packed::project(
                     &packed,
+                    bits,
                     k,
                     &a[row * k..(row + 1) * k],
                     n,
                 )?;
+                let magnitude: Vec<f32> = a[row * k..(row + 1) * k].iter().map(|v| v.abs()).collect();
+                let magnitude = crate::pplx_flash::packed::project(&packed_abs, bits, k, &magnitude, n)?;
                 for col in 0..n {
                     let error = (actual[row * n + col] - expected[col]).abs();
                     maximum = maximum.max(error);
                     ensure!(
-                        error <= 1e-4 + expected[col].abs() * 2e-6,
-                        "grouped Q4 dot mismatch"
+                        error <= 1e-4 + magnitude[col] * 2e-6,
+                        "grouped {mode} dot mismatch: case {case}, ({row},{col}), {} vs {}",
+                        actual[row * n + col],
+                        expected[col]
                     );
                 }
             }
@@ -259,13 +303,15 @@ pub(crate) async fn check() -> Result<serde_json::Value> {
             gpu.discard_scratch();
         }
     }
-    checks.push(fused_mlp_check().await?);
+    for mode in ["q4-e4", "q8-e8"] {
+        checks.push(fused_mlp_check(mode).await?);
+    }
     checks.push(norm_check().await?);
-    Ok(serde_json::json!({"passed":true,"scheme":"q4-w4a8-e4-r4-g64","checks":checks}))
+    Ok(serde_json::json!({"passed":true,"schemes":["q4-w4a8-e4-r4-g64","q8-w8a8-e8-r8-g64"],"checks":checks}))
 }
 
-async fn fused_mlp_check() -> Result<serde_json::Value> {
-    let gpu = Gpu::checkpoint("q4-e4", false).await?;
+async fn fused_mlp_check(mode: &str) -> Result<serde_json::Value> {
+    let gpu = Gpu::checkpoint(mode, false).await?;
     ensure!(gpu.pipelines.contains_key("q4_mlp"), "fused MLP kernel unavailable on this device");
     let (m, n, k) = (67, 192, 256);
     let weight = |seed: usize| -> Result<Buffer> {
@@ -275,7 +321,7 @@ async fn fused_mlp_check() -> Result<serde_json::Value> {
                 ((v.to_bits() >> 16) as u16).to_le_bytes()
             })
             .collect();
-        gpu.device.bytes(&crate::pplx_flash::packed_q4::pack(&raw, n, k)?, "MLP check weights")
+        gpu.device.bytes(&crate::pplx_flash::packed::pack(&raw, n, k, gpu.weight_bits())?, "MLP check weights")
     };
     let (gate, up) = (weight(37)?, weight(53)?);
     let x: Vec<f32> = (0..m * k).map(|i| ((i * 29 % 509) as f32 - 254.) / 97.).collect();
@@ -304,7 +350,7 @@ async fn fused_mlp_check() -> Result<serde_json::Value> {
         buffer.destroy();
     }
     gpu.discard_scratch();
-    Ok(serde_json::json!({"mode":"q4-e4-fused-mlp","rows":m,"outputs":n,"input":k,"exact_words":words}))
+    Ok(serde_json::json!({"mode":format!("{mode}-fused-mlp"),"rows":m,"outputs":n,"input":k,"exact_words":words}))
 }
 
 async fn norm_check() -> Result<serde_json::Value> {

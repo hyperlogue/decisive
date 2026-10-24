@@ -80,15 +80,23 @@ pub(super) struct Gpu {
     q4_expansion: Option<Buffer>,
 }
 impl Gpu {
-    pub(crate) fn grouped_q4(&self) -> bool {
+    pub(crate) fn grouped(&self) -> bool {
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         {
-            matches!(self.q4, Some(q4::Mode::Group64 | q4::Mode::Group64Signed))
+            matches!(self.q4, Some(q4::Mode::Group64 | q4::Mode::Group64Signed | q4::Mode::Group64Q8))
         }
         #[cfg(not(any(feature = "kernel-checks", feature = "pplx-webgpu")))]
         {
             false
         }
+    }
+    // Bits per code of grouped weights, embeddings and readout: 8 in Q8 modes, otherwise 4.
+    pub(crate) fn weight_bits(&self) -> u32 {
+        #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
+        if self.q4 == Some(q4::Mode::Group64Q8) {
+            return 8;
+        }
+        4
     }
     pub async fn new() -> Result<Self> {
         Self::with_precision(false).await
@@ -231,8 +239,10 @@ impl Gpu {
         };
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let projection_precision = match &self.int8 {
-            Some(state) if self.grouped_q4() && state.float_partials => "w4a8-fp32-group-dots",
-            Some(_) if self.grouped_q4() => "w4a8-packed-int32-group-dots",
+            Some(state) if self.grouped() && state.float_partials => {
+                if self.weight_bits() == 8 { "w8a8-fp32-group-dots" } else { "w4a8-fp32-group-dots" }
+            }
+            Some(_) if self.grouped() => "w4a8-packed-int32-group-dots",
             Some(state) if state.pure && state.float_partials => {
                 "w8a8-exact-fp32-partials-int32-outer-no-fp16"
             }
@@ -292,7 +302,7 @@ impl Gpu {
             self.device.bytes(bytes, "BF16 weight")?
         };
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
-        let buffer = if self.fp16_projections && shape.len() == 2 && !self.grouped_q4() {
+        let buffer = if self.fp16_projections && shape.len() == 2 && !self.grouped() {
             let converted = self.checkpoint_fp16(&buffer, bytes.len())?;
             if self.reuse_weight_buffers {
                 self.retain_weight_buffer(buffer);
@@ -400,7 +410,7 @@ impl Gpu {
         let int8_tile = [64, 64];
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         let int8_tile = self.int8.as_ref().map_or(int8_tile, |s| s.tile);
-        let groups = if (name == "int8_input" || name == "int8_silu_input") && self.grouped_q4() {
+        let groups = if (name == "int8_input" || name == "int8_silu_input") && self.grouped() {
             [params[0], params[2].div_ceil(256), 1]
         } else if name == "int8_input" || name == "int8_weight" || name == "q4_weight" {
             [params[0], 1, 1]
@@ -465,7 +475,7 @@ impl Gpu {
     ) -> Result<Buffer> {
         let y = self.empty(n * output)?;
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
-        if self.grouped_q4() {
+        if self.grouped() {
             let input_buffer = self.int8_input(e, x, n, input)?;
             // The 64x64 tile leaves the 32-wide recurrent projections few workgroups.
             let name = if output <= 32 && self.pipelines.contains_key("int8_gemm_narrow") { "int8_gemm_narrow" } else { "int8_gemm" };
@@ -852,7 +862,7 @@ impl Gpu {
         #[allow(unused_mut)]
         let mut quantized_down: Option<Buffer> = None;
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
-        if int8_mlp.is_some() && self.grouped_q4() && self.fused_mlp && self.pipelines.contains_key("q4_mlp") {
+        if int8_mlp.is_some() && self.grouped() && self.fused_mlp && self.pipelines.contains_key("q4_mlp") {
             let input = self.int8_input(&mut e, &norm, nq, D)?;
             let output = self.empty(nq * (9216 / 64) * 17)?;
             self.run(
@@ -890,7 +900,7 @@ impl Gpu {
         }
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
         if int8_mlp.is_some()
-            && self.grouped_q4()
+            && self.grouped()
             && quantized_down.is_none()
             && quantized_activated.is_none()
             && self.pipelines.contains_key("int8_silu_input")

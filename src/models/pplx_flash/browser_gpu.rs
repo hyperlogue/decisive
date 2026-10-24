@@ -92,6 +92,7 @@ impl BrowserGpu {
             "q4-e4-scan-chained" => ("q4-e4-scan-chained-reuse", 0),
             "q4-e4-scan-baseline" => ("q4-e4-scan-baseline-reuse", 0),
             "q4-e4-scan-staged" => ("q4-e4-scan-staged-reuse", 0),
+            "q8-e8" => ("q8-e8-reuse", 0),
             _ => (mode, 0),
         };
         let gpu = webgpu::Gpu::checkpoint_with_tuning(decoder_mode, profile, tune, tuning_budget_ms)
@@ -107,8 +108,8 @@ impl BrowserGpu {
             headers_json,
         )?;
         model.benchmark = cfg!(feature = "kernel-checks");
-        if model.gpu.grouped_q4() && model.engine.packed_readout.is_empty() {
-            return Err(error("grouped Q4 requires a packed Q4 readout"));
+        if model.gpu.grouped() && model.engine.packed_readout_bits != model.gpu.weight_bits() {
+            return Err(error("grouped weights require a packed readout of the same precision"));
         }
         model.auxiliary_bits = auxiliary_bits;
         if auxiliary_bits != 0 {
@@ -172,8 +173,8 @@ impl BrowserGpu {
         if self.started || self.chunk >= self.chunks.len() {
             return Err(error("no prepared chunk, or previous chunk unfinished"));
         }
-        let row_bytes = if self.gpu.grouped_q4() {
-            super::packed_q4::size(1, D).map_err(error)?
+        let row_bytes = if self.gpu.grouped() {
+            super::packed::size(1, D, self.gpu.weight_bits()).map_err(error)?
         } else {
             D * 2
         };
@@ -181,8 +182,8 @@ impl BrowserGpu {
             return Err(error("embedding row count mismatch"));
         }
         self.work.hidden.clear();
-        if self.gpu.grouped_q4() {
-            super::packed_q4::unpack(embedding_rows, &mut self.work.hidden).map_err(error)?;
+        if self.gpu.grouped() {
+            super::packed::unpack(embedding_rows, self.gpu.weight_bits(), &mut self.work.hidden).map_err(error)?;
         } else {
             self.work.hidden.extend(
                 embedding_rows
@@ -211,8 +212,8 @@ impl BrowserGpu {
             return Err(error("tensor belongs to another layer"));
         }
         let range = self.index.tensor(name).map_err(error)?;
-        let expected = if self.gpu.grouped_q4() && range.shape.len() == 2 {
-            super::packed_q4::size(range.shape[0], range.shape[1]).map_err(error)? as u64
+        let expected = if self.gpu.grouped() && range.shape.len() == 2 {
+            super::packed::size(range.shape[0], range.shape[1], self.gpu.weight_bits()).map_err(error)? as u64
         } else {
             range.end - range.start
         };
@@ -238,8 +239,8 @@ impl BrowserGpu {
             return Err(error("duplicate tensor or wrong resident layer"));
         }
         let range = self.index.tensor(name).map_err(error)?;
-        let expected = if self.gpu.grouped_q4() && range.shape.len() == 2 {
-            super::packed_q4::size(range.shape[0], range.shape[1]).map_err(error)? as u64
+        let expected = if self.gpu.grouped() && range.shape.len() == 2 {
+            super::packed::size(range.shape[0], range.shape[1], self.gpu.weight_bits()).map_err(error)? as u64
         } else {
             range.end - range.start
         };
@@ -268,7 +269,7 @@ impl BrowserGpu {
         #[allow(unused_mut)]
         let mut info = self.gpu.info();
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
-        if self.gpu.grouped_q4() {
+        if self.gpu.grouped() {
             info["quantization"] = self.gpu.q4_info();
         }
         if self.buffers.is_some() {
@@ -283,7 +284,7 @@ impl BrowserGpu {
                 .flat_map(|layer| layer.values()).map(|t| t.buffer.size()).sum::<u64>());
             info["resident_decoder_layers"] = json!(self.resident_layers.len());
             info["embedding"] = json!("wasm-bounded-row-cache");
-            info["queued_resident_supported"] = json!(self.gpu.grouped_q4() && self.gpu.supports_queued());
+            info["queued_resident_supported"] = json!(self.gpu.grouped() && self.gpu.supports_queued());
             info["quantization"] = self.gpu.q4_info();
         }
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
@@ -326,7 +327,7 @@ impl BrowserGpu {
     pub fn supports_queued(&self) -> bool {
         let weights = self.buffers.is_some();
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
-        let weights = weights || self.resident_layers.len() == 32 && self.gpu.grouped_q4();
+        let weights = weights || self.resident_layers.len() == 32 && self.gpu.grouped();
         weights && self.gpu.supports_queued()
     }
 
@@ -472,7 +473,7 @@ impl BrowserGpu {
             }
             self.gpu.start_profile();
         }
-        let pack_ms = if resident || self.gpu.grouped_q4() {
+        let pack_ms = if resident || self.gpu.grouped() {
             0.0
         } else {
             monotonic_now() - pack_start

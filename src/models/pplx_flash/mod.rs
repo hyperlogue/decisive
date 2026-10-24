@@ -1,11 +1,11 @@
 mod backbone;
 mod cpu;
 mod input;
-mod packed_q4;
+mod packed;
 #[cfg(feature = "cpu")]
-mod export_q4;
+mod export_packed;
 #[cfg(feature = "cpu")]
-pub use export_q4::export_webgpu_q4;
+pub use export_packed::export_webgpu_packed;
 #[cfg(all(feature = "cpu", feature = "int8"))]
 mod int8;
 #[cfg(feature = "cpu")]
@@ -53,6 +53,8 @@ pub struct Engine {
     input: input::Encoder,
     readout: Vec<f32>,
     packed_readout: Vec<u8>,
+    // Weight bits of the packed group-64 readout (4 or 8), when present.
+    packed_readout_bits: u32,
     #[cfg(all(feature = "cpu", feature = "int8"))]
     quantized_readout: Option<int8::Matrix>,
     #[cfg(feature = "cpu")]
@@ -122,7 +124,11 @@ impl Engine {
             "unsupported position limit"
         );
         let input = input::Encoder::new(decision, joint, tokenizer)?;
-        let (readout, packed_readout) = if readout.len() == packed_q4::size(255, D)? {
+        let packed_readout_bits = [4, 8]
+            .into_iter()
+            .find(|&bits| packed::size(255, D, bits).is_ok_and(|n| n == readout.len()))
+            .unwrap_or(0);
+        let (readout, packed_readout) = if packed_readout_bits != 0 {
             (Vec::new(), readout.to_vec())
         } else {
             (Weights::from_bytes(readout)?.get("weight", &[255, D])?, Vec::new())
@@ -132,6 +138,7 @@ impl Engine {
             input,
             readout,
             packed_readout,
+            packed_readout_bits,
             #[cfg(all(feature = "cpu", feature = "int8"))]
             quantized_readout: None,
             #[cfg(feature = "cpu")]
@@ -151,7 +158,7 @@ impl Engine {
             let at = if self.prune_last { i } else { marker };
             let x = &work.hidden[at * D..(at + 1) * D];
             if !self.packed_readout.is_empty() {
-                let values = packed_q4::project(&self.packed_readout, D, x, count)?;
+                let values = packed::project(&self.packed_readout, self.packed_readout_bits, D, x, count)?;
                 ensure!(values.iter().all(|v| v.is_finite()), "non-finite packed logits");
                 logits.push(values);
                 continue;

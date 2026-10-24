@@ -61,7 +61,7 @@ impl Gpu {
         } else {
             (mode, None)
         };
-        let requested_wide = mode == "q4-e4";
+        let requested_wide = mode == "q4-e4" || mode == "q8-e8";
         let grouped_float = requested_wide || mode == "q4-e4-baseline";
         let mode = if ["q4-e4-int8", "q4-e4-baseline"].contains(&mode) { "q4-e4" } else { mode };
         ensure!(
@@ -78,7 +78,8 @@ impl Gpu {
                 "q4-fused",
                 "q4-buffered",
                 "q4-e4",
-                "q4-e4-signed"
+                "q4-e4-signed",
+                "q8-e8"
             ]
             .contains(&mode),
             "unknown checkpoint configuration"
@@ -86,11 +87,13 @@ impl Gpu {
         let mut gpu = Self::with_options(mode != "bf16", profile).await?;
         gpu.reuse_weight_buffers = reuse;
         let wide = requested_wide && gpu.device.device.limits().max_compute_workgroup_storage_size >= 16896;
+        ensure!(wide || mode != "q8-e8", "Q8 weights require 16896 bytes of workgroup storage");
         gpu.q4 = match mode {
             "q4-fused" => Some(q4::Mode::Fused),
             "q4-buffered" => Some(q4::Mode::Buffered),
             "q4-e4" => Some(q4::Mode::Group64),
             "q4-e4-signed" => Some(q4::Mode::Group64Signed),
+            "q8-e8" => Some(q4::Mode::Group64Q8),
             _ => None,
         };
         if mode == "bf16" {
@@ -139,11 +142,11 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         let fp16_mlp = mode.starts_with("hybrid");
         let float_partials = grouped_float || mode.ends_with("f32");
         for (name, source) in [
-            ("int8_input", if gpu.grouped_q4() { grouped_q4::quantize() } else { int8::quantize(false) }),
+            ("int8_input", if gpu.grouped() { grouped_q4::quantize() } else { int8::quantize(false) }),
             ("int8_weight", int8::quantize(true)),
             (
                 "int8_gemm",
-                if wide { include_str!("grouped_q4_tuned.wgsl").into() } else if grouped_float { grouped_q4::float_gemm() } else if gpu.grouped_q4() { grouped_q4::gemm(gpu.q4==Some(q4::Mode::Group64)) } else if gpu.q4 == Some(q4::Mode::Fused) {
+                if wide { gpu.grouped_kernel(include_str!("grouped_q4_tuned.wgsl")) } else if grouped_float { grouped_q4::float_gemm() } else if gpu.grouped() { grouped_q4::gemm(gpu.q4==Some(q4::Mode::Group64)) } else if gpu.q4 == Some(q4::Mode::Fused) {
                     q4::gemm(false)
                 } else if float_partials {
                     int8::fp32_partials(false)
@@ -153,7 +156,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             ),
             (
                 "int8_raw",
-                if wide { include_str!("grouped_q4_tuned.wgsl").into() } else if grouped_float { grouped_q4::float_gemm() } else if gpu.grouped_q4() { grouped_q4::gemm(gpu.q4==Some(q4::Mode::Group64)) } else if gpu.q4 == Some(q4::Mode::Fused) {
+                if wide { gpu.grouped_kernel(include_str!("grouped_q4_tuned.wgsl")) } else if grouped_float { grouped_q4::float_gemm() } else if gpu.grouped() { grouped_q4::gemm(gpu.q4==Some(q4::Mode::Group64)) } else if gpu.q4 == Some(q4::Mode::Fused) {
                     q4::gemm(true)
                 } else if float_partials {
                     int8::fp32_partials(true)
@@ -177,7 +180,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             gpu.install_pipeline("q4_weight", q4::quantize()).await?;
             gpu.install_pipeline("q4_expand", q4::expand()).await?;
         }
-        if gpu.grouped_q4() {
+        if gpu.grouped() {
             let budget = crate::inference::TuningBudget::new(tune, tuning_budget_ms, now_ms());
             gpu.install_pipeline("delta_scan_chained", shaders::source(shaders::DELTA_SCAN_CHAINED))
                 .await?;
@@ -186,10 +189,10 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             if budget.permits(now_ms()) { gpu.select_delta_scan(forced_scan).await?; }
             // Both match the tuned projection kernel bit for bit, so they require that kernel.
             if wide {
-                gpu.install_pipeline("int8_gemm_narrow", include_str!("grouped_q4_narrow.wgsl").into())
+                gpu.install_pipeline("int8_gemm_narrow", gpu.grouped_kernel(include_str!("grouped_q4_narrow.wgsl")))
                     .await?;
                 if gpu.device.device.limits().max_compute_workgroup_storage_size >= 29696 {
-                    gpu.install_pipeline("q4_mlp", include_str!("grouped_q4_mlp.wgsl").into())
+                    gpu.install_pipeline("q4_mlp", gpu.grouped_kernel(include_str!("grouped_q4_mlp.wgsl")))
                         .await?;
                 }
             }
@@ -323,10 +326,10 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             (CANDIDATES[2].1, include_str!("grouped_q4_unrolled_32x64.wgsl")),
             (CANDIDATES[3].1, include_str!("grouped_q4_r4x8.wgsl")),
         ] {
-            self.install_pipeline(name, source.into()).await?;
+            self.install_pipeline(name, self.grouped_kernel(source)).await?;
         }
         let x = self.device.bytes(bytemuck::cast_slice(&packed_test_words(M, K, 17, 0)), "GEMM selection input")?;
-        let w = self.device.bytes(bytemuck::cast_slice(&packed_test_words(N, K, 9, 7)), "GEMM selection weights")?;
+        let w = self.device.bytes(bytemuck::cast_slice(&packed_test_words(N, K, self.group_words(), 7)), "GEMM selection weights")?;
         let mut outputs = Vec::new();
         for _ in CANDIDATES {
             outputs.push(self.device.empty(M * N, "GEMM selection output")?);
@@ -369,8 +372,8 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         const N: usize = 9216;
         const K: usize = D;
         let x = self.device.bytes(bytemuck::cast_slice(&packed_test_words(M, K, 17, 0)), "MLP selection input")?;
-        let gate = self.device.bytes(bytemuck::cast_slice(&packed_test_words(N, K, 9, 7)), "MLP selection gate")?;
-        let up = self.device.bytes(bytemuck::cast_slice(&packed_test_words(N, K, 9, 11)), "MLP selection up")?;
+        let gate = self.device.bytes(bytemuck::cast_slice(&packed_test_words(N, K, self.group_words(), 7)), "MLP selection gate")?;
+        let up = self.device.bytes(bytemuck::cast_slice(&packed_test_words(N, K, self.group_words(), 11)), "MLP selection up")?;
         let g = self.device.empty(M * N, "MLP selection gate output")?;
         let u = self.device.empty(M * N, "MLP selection up output")?;
         let words = M * (N / 64) * 17;
@@ -478,13 +481,13 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         &mut self,
         tensors: &HashMap<String, Tensor>,
     ) -> Result<()> {
-        if self.grouped_q4() { return Ok(()); }
+        if self.grouped() { return Ok(()); }
         let encoder = self.encode_checkpoint_weights(tensors)?;
         self.device.read(encoder, &self.dummy, 1).await?;
         Ok(())
     }
     pub(crate) fn prepare_queued_weights(&mut self, tensors: &HashMap<String, Tensor>) -> Result<()> {
-        if self.grouped_q4() { return Ok(()); }
+        if self.grouped() { return Ok(()); }
         if self.int8.is_some() {
             let encoder = self.encode_checkpoint_weights(tensors)?;
             self.device.submit_commands(encoder);
@@ -536,7 +539,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         &mut self,
         tensors: &mut HashMap<String, Tensor>,
     ) -> Result<()> {
-        if self.grouped_q4() { return self.wait_idle().await; }
+        if self.grouped() { return self.wait_idle().await; }
         ensure!(
             self.int8.as_ref().is_none_or(|state| state.pure),
             "resident weights currently support FP16, BF16 and all-INT8 projections"

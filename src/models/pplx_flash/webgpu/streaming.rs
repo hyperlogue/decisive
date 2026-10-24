@@ -20,7 +20,7 @@ struct Bank {
     spare: Vec<wgpu::Buffer>,
 }
 impl Bank {
-    fn assign(&mut self, layer: usize, ranges: &[Range], packed: bool) -> Result<()> {
+    fn assign(&mut self, layer: usize, ranges: &[Range], packed: u32) -> Result<()> {
         let mut needed = HashMap::<u64, usize>::new();
         for r in ranges {
             *needed.entry(weight_bytes(r, packed)?).or_default() += 1;
@@ -106,12 +106,13 @@ pub struct WeightBuffers {
     queue: wgpu::Queue,
     pub(super) index: Rc<Index>,
     state: Rc<RefCell<State>>,
-    packed: bool,
+    // Bits of prepacked group-64 weights, or 0 for raw BF16 tensors.
+    packed: u32,
 }
 
-fn weight_bytes(range: &Range, packed: bool) -> Result<u64> {
-    if packed && range.shape.len() == 2 {
-        Ok(crate::pplx_flash::packed_q4::size(range.shape[0], range.shape[1])? as u64)
+fn weight_bytes(range: &Range, packed: u32) -> Result<u64> {
+    if packed != 0 && range.shape.len() == 2 {
+        Ok(crate::pplx_flash::packed::size(range.shape[0], range.shape[1], packed)? as u64)
     } else {
         Ok(range.end - range.start)
     }
@@ -179,8 +180,8 @@ impl WeightBuffers {
         serde_json::json!({"banks":2,"raw_weight_bytes":s.banks.iter().map(Bank::bytes).sum::<u64>(),
             "peak_raw_weight_bytes":s.peak_bytes,"tensor_uploads":s.uploads,"reused_buffers":s.reused,
             "bank_layers":s.banks.iter().map(|b| b.layer).collect::<Vec<_>>(),
-            "computing_layer":s.computing,"packed_q4":self.packed,"weight_bytes":s.banks.iter().map(Bank::bytes).sum::<u64>(),
-            "peak_weight_bytes":s.peak_bytes,"scope":if self.packed {"prepacked Q4 group-64 weight banks; excludes activations"} else {"raw BF16 weight banks; excludes active converted/quantized weights and activations"},
+            "computing_layer":s.computing,"packed_q4":self.packed==4,"packed_bits":self.packed,"weight_bytes":s.banks.iter().map(Bank::bytes).sum::<u64>(),
+            "peak_weight_bytes":s.peak_bytes,"scope":if self.packed != 0 {"prepacked group-64 weight banks; excludes activations"} else {"raw BF16 weight banks; excludes active converted/quantized weights and activations"},
             "in_flight_layers":s.in_flight,"peak_in_flight_layers":s.peak_in_flight,
             "overlap":"uploads enqueued after compute submission and before its completion wait; hardware overlap is implementation-dependent"}).to_string()
     }
@@ -352,12 +353,12 @@ impl Gpu {
             queue: self.device.queue.clone(),
             index,
             state: Rc::new(RefCell::new(State::default())),
-            packed: self.grouped_q4(),
+            packed: if self.grouped() { self.weight_bits() } else { 0 },
         }
     }
     pub(crate) fn prepare_uploaded(&self, tensor: &Tensor) -> Result<Tensor> {
         #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
-        if self.fp16_projections && tensor.shape.len() == 2 && !self.grouped_q4() {
+        if self.fp16_projections && tensor.shape.len() == 2 && !self.grouped() {
             return Ok(Tensor {
                 shape: tensor.shape.clone(),
                 buffer: self.checkpoint_fp16(&tensor.buffer, tensor.buffer.size() as usize)?,

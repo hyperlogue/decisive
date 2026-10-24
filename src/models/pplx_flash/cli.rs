@@ -95,6 +95,7 @@ impl From<Quantization> for Precision {
 enum Command {
     Fetch,
     ExportWebgpuQ4 { #[arg(long)] output: PathBuf },
+    ExportWebgpuQ8 { #[arg(long)] output: PathBuf },
     Predict {
         #[arg(long)]
         input: Option<PathBuf>,
@@ -184,8 +185,9 @@ pub(crate) fn run(args: Args) -> Result<()> {
     if matches!(args.command, Command::Fetch) {
         return fetch(&args.model);
     }
-    if let Command::ExportWebgpuQ4 { output } = &args.command {
-        return decisive::pplx_flash::export_webgpu_q4(&args.model, output);
+    if let Command::ExportWebgpuQ4 { output } | Command::ExportWebgpuQ8 { output } = &args.command {
+        let bits = if matches!(args.command, Command::ExportWebgpuQ4 { .. }) { 4 } else { 8 };
+        return decisive::pplx_flash::export_webgpu_packed(&args.model, output, bits);
     }
     if let Command::Inspect { input } = &args.command {
         let model = Model::load(&args.model, args.portable)?;
@@ -206,7 +208,7 @@ pub(crate) fn run(args: Args) -> Result<()> {
         if args.resident{model.preload_weights()?;}
         let model_load_ms=loading.elapsed().as_secs_f64()*1000.;
         match args.command{
-            Command::Fetch|Command::Inspect{..}|Command::ExportWebgpuQ4{..}=>unreachable!(),
+            Command::Fetch|Command::Inspect{..}|Command::ExportWebgpuQ4{..}|Command::ExportWebgpuQ8{..}=>unreachable!(),
             Command::Evaluate{input,rounds,jsonl}=>{
                 ensure!(rounds>0,"rounds must be positive");
                 let text=std::fs::read_to_string(input)?;

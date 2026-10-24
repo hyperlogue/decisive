@@ -1,4 +1,4 @@
-use super::{REVISION, SHARDS, packed_q4, weights::Index};
+use super::{REVISION, SHARDS, packed, weights::Index};
 use anyhow::{Result, ensure};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -8,7 +8,11 @@ use std::{
     path::Path,
 };
 
-pub fn export_webgpu_q4(model: &Path, destination: &Path) -> Result<()> {
+/// Group-64 WebGPU weights: Q4 (W4A8, E4, R4) or Q8 (W8A8, E8, R8) projections, embeddings and
+/// readout, with the remaining tensors kept as BF16.
+pub fn export_webgpu_packed(model: &Path, destination: &Path, bits: u32) -> Result<()> {
+    ensure!(bits == 4 || bits == 8, "packed WebGPU weights are Q4 or Q8");
+    let prefix = if bits == 4 { "q4-e4" } else { "q8-e8" };
     ensure!(
         !destination.exists(),
         "choose a new packed checkpoint directory"
@@ -38,7 +42,7 @@ pub fn export_webgpu_q4(model: &Path, destination: &Path) -> Result<()> {
     let mut files = serde_json::Map::new();
     let mut layers = Vec::new();
     for layer in 0..32 {
-        let name = format!("q4-e4-layer-{layer:02}.bin");
+        let name = format!("{prefix}-layer-{layer:02}.bin");
         let mut file = File::create(destination.join(&name))?;
         let mut tensors = Vec::new();
         let mut position = 0;
@@ -46,7 +50,7 @@ pub fn export_webgpu_q4(model: &Path, destination: &Path) -> Result<()> {
         for r in index.layer(layer)? {
             let raw = read(&r)?;
             let packed = if r.shape.len() == 2 {
-                packed_q4::pack(&raw, r.shape[0], r.shape[1])?
+                packed::pack(&raw, r.shape[0], r.shape[1], bits)?
             } else {
                 raw
             };
@@ -66,33 +70,33 @@ pub fn export_webgpu_q4(model: &Path, destination: &Path) -> Result<()> {
     }
     let embedding = index.tensor("language_model.embed_tokens.weight")?;
     let raw = read(&embedding)?;
-    let embedding = packed_q4::pack(&raw, embedding.shape[0], embedding.shape[1])?;
+    let embedding = packed::pack(&raw, embedding.shape[0], embedding.shape[1], bits)?;
     drop(raw);
     let readout = fs::read(model.join("readout.safetensors"))?;
-    let readout = packed_q4::pack(
+    let readout = packed::pack(
         super::weights::Weights::from_bytes(&readout)?.bytes("weight", &[255, 2560])?,
         255,
         2560,
+        bits,
     )?;
     let norm = read(&index.tensor("language_model.norm.weight")?)?;
-    for (name, bytes) in [
-        ("q4-e4-embedding.bin", embedding),
-        ("q4-e4-readout.bin", readout),
-        ("q4-e4-norm.bin", norm),
-    ] {
-        fs::write(destination.join(name), &bytes)?;
+    for (name, bytes) in [("embedding", embedding), ("readout", readout), ("norm", norm)] {
+        let name = format!("{prefix}-{name}.bin");
+        fs::write(destination.join(&name), &bytes)?;
         files.insert(
-            name.into(),
+            name,
             json!({"bytes":bytes.len(),"sha256":format!("{:x}",Sha256::digest(&bytes))}),
         );
     }
     let total: u64 = layers.iter().map(|l| l["bytes"].as_u64().unwrap()).sum();
-    let manifest = json!({"schema_version":1,"revision":REVISION,"scheme":"q4-w4a8-e4-r4-g64",
-        "group_size":64,"group_bytes":36,"embedding_row_bytes":1440,"layers":layers,"headers":headers,
-        "embedding":"q4-e4-embedding.bin","readout":"q4-e4-readout.bin","norm":"q4-e4-norm.bin",
+    let manifest = json!({"schema_version":1,"revision":REVISION,
+        "scheme":format!("q{bits}-w{bits}a8-e{bits}-r{bits}-g64"),"group_size":64,
+        "group_bytes":packed::size(1, 64, bits)?,"embedding_row_bytes":packed::size(1, 2560, bits)?,
+        "layers":layers,"headers":headers,"embedding":format!("{prefix}-embedding.bin"),
+        "readout":format!("{prefix}-readout.bin"),"norm":format!("{prefix}-norm.bin"),
         "decoder_bytes":total,"files":files});
     fs::write(
-        destination.join("packed-q4-e4.json"),
+        destination.join(format!("packed-{prefix}.json")),
         serde_json::to_vec_pretty(&manifest)?,
     )?;
     Ok(())

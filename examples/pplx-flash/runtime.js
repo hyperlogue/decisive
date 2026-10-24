@@ -2,7 +2,10 @@ import {createEmbeddingCache} from './embedding-cache.js';
 
 export async function loadFlash(api, source, progress = () => {}, backend = 'wasm', configuration = null) {
   const initializationStart=performance.now(),resident=configuration?.resident===true;
-  const packed=configuration?.mode?.startsWith('q4-e4')===true;
+  // Prepacked group-64 checkpoints: Q4 (W4A8/E4/R4) or Q8 (W8A8/E8/R8).
+  const format=[{prefix:'q4-e4',scheme:'q4-w4a8-e4-r4-g64',rowBytes:1440},{prefix:'q8-e8',scheme:'q8-w8a8-e8-r8-g64',rowBytes:2720}]
+    .find(f=>configuration?.mode?.startsWith(f.prefix));
+  const packed=Boolean(format);
   if (!["wasm", "webgpu"].includes(backend)) throw Error("Unknown Pplx backend");
   const files=['model-00001-of-00002.safetensors','model-00002-of-00002.safetensors'];
   let transferred=0;
@@ -25,10 +28,10 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
   const headers=[];
   let packedManifest;
   if(packed){
-    packedManifest=JSON.parse(new TextDecoder().decode(await read('packed-q4-e4.json')));
-    if(packedManifest.schema_version!==1||packedManifest.scheme!=='q4-w4a8-e4-r4-g64'||packedManifest.revision!=='6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d'||packedManifest.layers.length!==32||packedManifest.embedding_row_bytes!==1440)throw Error('Invalid packed Q4-E4 manifest');
+    packedManifest=JSON.parse(new TextDecoder().decode(await read(`packed-${format.prefix}.json`)));
+    if(packedManifest.schema_version!==1||packedManifest.scheme!==format.scheme||packedManifest.revision!=='6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d'||packedManifest.layers.length!==32||packedManifest.embedding_row_bytes!==format.rowBytes)throw Error(`Invalid packed ${format.prefix} manifest`);
     headers.push(...packedManifest.headers);
-    for(const layer of packedManifest.layers){if(!/^q4-e4-layer-\d{2}\.bin$/.test(layer.file))throw Error('Invalid packed layer path');files.push(layer.file);}
+    for(const layer of packedManifest.layers){if(!new RegExp(`^${format.prefix}-layer-\\d{2}\\.bin$`).test(layer.file))throw Error('Invalid packed layer path');files.push(layer.file);}
   }else{
   for(const name of files){
     const prefix=await read(name,0,8);
@@ -51,7 +54,7 @@ export async function loadFlash(api, source, progress = () => {}, backend = 'was
   let adapter=backend === "webgpu" ? JSON.parse(model.adapter()) : null;
   const tensor=async name=>{const r=JSON.parse(model.tensorRange(name));return read(files[r.file],r.start,r.end);};
   const embedding=JSON.parse(model.tensorRange('language_model.embed_tokens.weight'));
-  const embeddingCache=packed?createEmbeddingCache(id=>read(packedManifest.embedding,id*1440,(id+1)*1440),{rowBytes:1440}):createEmbeddingCache(id=>read(files[embedding.file],embedding.start+id*5120,embedding.start+(id+1)*5120));
+  const embeddingCache=packed?createEmbeddingCache(id=>read(packedManifest.embedding,id*format.rowBytes,(id+1)*format.rowBytes),{rowBytes:format.rowBytes}):createEmbeddingCache(id=>read(files[embedding.file],embedding.start+id*5120,embedding.start+(id+1)*5120));
   const norm=packed?await read(packedManifest.norm):await tensor('language_model.norm.weight');
   let worker,sequence=0,busy=false;
   const pendingReads=new Map();

@@ -52,7 +52,7 @@ impl Gpu {
             k % 4 == 0 && k <= 32768,
             "INT8 reduction must be a multiple of four, at most 32768"
         );
-        let size = if self.grouped_q4() {
+        let size = if self.grouped() {
             ensure!(k % 64 == 0 && !weight, "grouped weights must be prepacked");
             rows * (k / 64) * 17
         } else { rows * (k / 4 + 2) };

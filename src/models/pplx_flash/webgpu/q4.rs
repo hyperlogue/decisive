@@ -1,9 +1,15 @@
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Mode { Fused, Buffered, Group64, Group64Signed }
+pub(super) enum Mode { Fused, Buffered, Group64, Group64Signed, Group64Q8 }
 
 impl Gpu {
+    // Grouped weights use 9 (Q4) or 17 (Q8) words per 64-value group.
+    pub(super) fn group_words(&self) -> usize { if self.weight_bits() == 8 { 17 } else { 9 } }
+    // A grouped Q4 kernel, rewritten for Q8 weights in Q8 modes.
+    pub(super) fn grouped_kernel(&self, source: &str) -> String {
+        if self.weight_bits() == 8 { grouped_q4::q8_weights(source) } else { source.into() }
+    }
     pub(super) fn quantize_q4(&mut self, e: &mut CommandEncoder, input: &Buffer, rows: usize, k: usize) -> Result<Buffer> {
         ensure!(k % 8 == 0 && k <= 32768, "Q4 reduction must be a multiple of eight, at most 32768");
         let out = self.device.empty(rows * (k / 8 + 2), "Q4 codes, row scales and sums")?;
@@ -24,10 +30,11 @@ impl Gpu {
         Ok(buffer.clone())
     }
     pub(crate) fn q4_info(&self) -> serde_json::Value {
-        if self.grouped_q4() {
+        if self.grouped() {
             let float = self.int8.as_ref().is_some_and(|s|s.float_partials);
-            return serde_json::json!({"weight_bits":4,"activation_bits":8,"embedding_bits":4,"readout_bits":4,
-                "group_size":64,"scheme":"q4-w4a8-e4-r4-g64","q4_unpack":"workgroup-tile","weight_preprocessing":"offline",
+            let bits = self.weight_bits();
+            return serde_json::json!({"weight_bits":bits,"activation_bits":8,"embedding_bits":bits,"readout_bits":bits,
+                "group_size":64,"scheme":format!("q{bits}-w{bits}a8-e{bits}-r{bits}-g64"),"q4_unpack":"workgroup-tile","weight_preprocessing":"offline",
                 "group_dot_arithmetic":if float{"fp32-exact-integer"}else{"int32"},
                 "packed_dot":if float{None}else{Some(if self.q4==Some(Mode::Group64){"unsigned-corrected"}else{"signed"})}});
         }
