@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {pathToFileURL} from 'node:url';
 import vm from 'node:vm';
 
 export async function checkSuite(page){
@@ -43,4 +44,9 @@ export async function checkSuite(page){
   assert.equal(selection.rounds%selection.specs.length,0);
   const unavailable=await suite.run({},{});assert.equal(unavailable.verdict.code,'unavailable');
   return {syntax:true,verdict_cases:16,selected_kernel_only:true,preflight:true,balanced_confirmation:true};
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (!process.argv[2]) throw Error('Usage: node scripts/pplx_flash/check_dp4a_suite.mjs packaged.html');
+  console.log(JSON.stringify(await checkSuite(process.argv[2]), null, 2));
 }

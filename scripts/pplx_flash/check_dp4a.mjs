@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile,writeFile,mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import vm from 'node:vm';
 
 export async function checkDp4a(page) {
@@ -112,4 +113,9 @@ export async function checkDp4a(page) {
   for(const arithmetic of ['builtin','unsigned'])await writeFile(join(directory,`raw-${arithmetic}.wgsl`),core.registerShader({arithmetic,raw:true,rm:8}));
   for(const kind of ['fp16','int8','int32','int8-unpack-once','fp32'])await writeFile(join(directory,`arithmetic-${kind}.wgsl`),primitive.matrixShader(kind));
   return {transpose_roundtrip:true,prepacked_reference:true,primitive_reference:true,syntax:true,signed_packing:true,activation_quantization:true,integer_dot_reference:true,shaders:directory};
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (!process.argv[2]) throw Error('Usage: node scripts/pplx_flash/check_dp4a.mjs packaged.html');
+  console.log(JSON.stringify(await checkDp4a(process.argv[2]), null, 2));
 }

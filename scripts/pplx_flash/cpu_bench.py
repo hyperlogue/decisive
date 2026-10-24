@@ -340,7 +340,7 @@ def render(result):
     sections += '<h2>Scope and reproduction</h2><ul>' + ''.join('<li>'+escape(x)+'</li>' for x in result['limitations']) + '</ul>'
     sections += '<p>'+escape(result['q4_all_scope'])+'</p><p>'+escape(result['scheme'])+'</p>'
     sections += '<p>Quantized kernels retain packed weight panels, reuse shared activation quantization, and keep the existing tiled attention, recurrent scans, and decision-token pruning. Q4 expands a small panel into reusable thread-local scratch for longer inputs, and unpacks directly in AVX2 registers for short inputs.</p>'
-    sections += '<p>Run <code>scripts/pplx_flash/cpu_bench.py</code> as described in its module docstring. <a href="summary.json">Full metrics and per-input decisions</a> · <a href="corpus.json">Frozen corpus and dataset provenance</a></p>'
+    sections += '<p>Run <code>python3 scripts/pplx_flash/cpu_bench.py --help</code> for reproduction commands. <a href="summary.json">Full metrics and per-input decisions</a> · <a href="corpus.json">Frozen corpus and dataset provenance</a></p>'
     sections += '<p>Quality and performance build identities are recorded separately. Every warmed performance output must match the corresponding corpus output.</p>'
     if result.get('kernel_equivalence'):
         sections += '<p>The final Q4 panel-cache implementation was rerun on the complete corpus: all Q4 responses and logits match the earlier register-unpacking implementation exactly. BF16 and Q8 quality runs precede that optimization.</p>'

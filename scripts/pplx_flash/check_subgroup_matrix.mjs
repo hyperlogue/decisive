@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import vm from 'node:vm';
 
 export async function checkSubgroupMatrix(root,page) {
@@ -16,4 +17,10 @@ export async function checkSubgroupMatrix(root,page) {
   assert.throws(()=>context.PplxSubgroupMatrix.shader('i8'));
   assert.throws(()=>context.PplxSubgroupMatrix.shader('f16',64));
   return {javascript_syntax:true,unsupported_feature_gate:true,unsupported_configuration_rejected:true};
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (!process.argv[2]) throw Error('Usage: node scripts/pplx_flash/check_subgroup_matrix.mjs packaged.html');
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  console.log(JSON.stringify(await checkSubgroupMatrix(root, process.argv[2]), null, 2));
 }

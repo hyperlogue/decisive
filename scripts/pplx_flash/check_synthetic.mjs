@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {performance} from 'node:perf_hooks';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import vm from 'node:vm';
 
 export async function checkSynthetic(root, page) {
@@ -21,18 +22,9 @@ export async function checkSynthetic(root, page) {
     async configureGemmSubtile(tile,load){assert.ok([32,64].includes(tile)&&[8,16].includes(load));}
     async configureGemmK64(tile){assert.ok([32,64].includes(tile));}
     configureInputChange(first,last,seed){this.change=seed===0?0:first===0?1:2;}
-    async configureGemmRegisters(rows,columns){assert.ok([4,8].includes(rows)&&[4,8].includes(columns));}
     async configureMlp(tile){assert.ok([32,64].includes(tile));}
     async configurePadding(){}
-    async configureMlpRegisters(rows){assert.ok([4,8,16].includes(rows));}
-    async configureMlpGeometry(tm,tn,rm,rn,bk){assert.ok(tm%rm===0&&tn%rn===0&&2*bk*(tm+2*(tn+1))<=16384);}
-    async configureInt8Geometry(tm,tn,rm,rn,kw){assert.ok(tm%rm===0&&tn%rn===0&&4*kw*(tm+tn)<=16384);}
-    async configureInt8Reduction(words){assert.ok([16,32].includes(words));}
     configurePureInt8(){this.pure=true;}
-    async configureInt8Small(){}
-    async configureInt8IntegerOuter(rows){assert.ok([4,8].includes(rows));}
-    async configureInputLayout(transpose){assert.equal(typeof transpose,"boolean");}
-    async configureInt8FusedRows(rows){assert.ok([4,8].includes(rows));}
     async configureInt8FloatPartials(rows){assert.ok([4,8].includes(rows));}
     async configureDeltaScan(width){assert.ok([4,16,128].includes(width));}
     async configureInt8(fused,fp16Mlp){this.int8=true;assert.equal(typeof fused,'boolean');assert.equal(typeof fp16Mlp,'boolean');assert.ok(!fused||!fp16Mlp);}
@@ -149,7 +141,6 @@ export async function checkSynthetic(root, page) {
     const result=messages.at(-1).report;
     assert.equal(result.completed,true);
     if(!candidate.startsWith('gemm'))assert.equal(result.engines[1].configuration.scanUnroll,4);
-    assert.equal(result.engines[0].configuration.int8Geometry,undefined,'Combined results compare with the original path baseline');
     assert.ok(result.cases.every(c=>c.paired[0].logits.max_absolute_error===0));
   }
   const freedBeforeFailure=freed;
@@ -164,4 +155,10 @@ export async function checkSynthetic(root, page) {
   assert.match(messages.at(-1).report.error,/initialization failure/);
   assert.equal(freed,freedBeforeFailure+3);
   return {script_syntax:true,warmup_exclusion:true,alternating_order:true,generation_excluded:true,failure_cleanup:true};
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (!process.argv[2]) throw Error('Usage: node scripts/pplx_flash/check_synthetic.mjs packaged.html');
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  console.log(JSON.stringify(await checkSynthetic(root, process.argv[2]), null, 2));
 }

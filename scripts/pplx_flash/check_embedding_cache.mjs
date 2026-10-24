@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {Blob} from 'node:buffer';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 
 export async function checkEmbeddingCache(root) {
   const {createEmbeddingCache} = await import(pathToFileURL(`${root}/examples/pplx-flash/embedding-cache.js`));
@@ -55,4 +55,9 @@ export async function checkEmbeddingCache(root) {
   assert.equal(b.embedding_cache.hits,2);assert.equal(c.embedding_cache.misses,0);
   runtime.dispose();
   return {byte_identity:true,cross_request_hits:true,bounded_eviction:true,request_larger_than_cache:true,failed_read_recovery:true,checkpoint_isolation:true,runtime_reads:[a.bytes_read,b.bytes_read,c.bytes_read]};
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  console.log(JSON.stringify(await checkEmbeddingCache(root), null, 2));
 }

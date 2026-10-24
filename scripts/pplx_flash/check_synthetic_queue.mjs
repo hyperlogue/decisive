@@ -4,6 +4,7 @@ import {webcrypto} from 'node:crypto';
 import {Blob,atob} from 'node:buffer';
 import {setTimeout,clearTimeout} from 'node:timers';
 import {performance} from 'node:perf_hooks';
+import {pathToFileURL} from 'node:url';
 import vm from 'node:vm';
 
 export async function checkSyntheticQueue(page) {
@@ -33,4 +34,9 @@ export async function checkSyntheticQueue(page) {
     else {assert.equal(report.completed,false);assert.match(report.error,outcome==='stop'?/Stopped by user/:/injected failure/);assert.equal(created,outcome==='stop'?1:2);}
   }
   return {sequential_workers:true,failure_stops_queue:true,stop_cleanup:true,visibility_preserved:true};
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (!process.argv[2]) throw Error('Usage: node scripts/pplx_flash/check_synthetic_queue.mjs packaged.html');
+  console.log(JSON.stringify(await checkSyntheticQueue(process.argv[2]), null, 2));
 }
