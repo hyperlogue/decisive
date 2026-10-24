@@ -31,7 +31,7 @@ The Noto Sans SC font comes from the pinned `@fontsource/noto-sans-sc` package i
 
 The entry HTML loads scripts, workers, fonts, WASM, and the model catalog from one fingerprinted release directory. This prevents a previous service worker from mixing the new UI with old inference or storage code. Storage replies must match the selected model ID, pinned revision, total bytes, and file list before downloads can be enabled. Existing OPFS model files are preserved across app upgrades. `node site/tests/release-cache.mjs` verifies migration from an old cached Pplx worker and rejects forced mismatched replies.
 
-The complete `dist/` output works under any URL directory. The service worker caches app assets under that directory; weights remain in OPFS and are not duplicated in Cache Storage. After setup, analysis works offline.
+The complete `dist/` output works under any URL directory. The service worker caches app assets under that directory; weights remain in OPFS and are not duplicated in Cache Storage. After setup, analysis works offline. Page loads always fetch the latest `index.html` from the network and fall back to the cached copy only when offline. A new service worker activates as soon as it installs; open tabs check for updates on focus and every 30 minutes, show a Reload prompt when `release.json` names a newer release, and reload by themselves while hidden if no draft or model operation would be lost. `node site/tests/release-cache.mjs` simulates a deploy to verify this.
 
 ## Interface and storage
 

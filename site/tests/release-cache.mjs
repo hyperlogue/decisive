@@ -21,6 +21,7 @@ self.addEventListener('fetch',e=>{
   e.respondWith(caches.open(CACHE).then(c=>c.match(e.request)));
 });`;
 const types={'.js':'text/javascript','.json':'application/json','.html':'text/html','.css':'text/css','.wasm':'application/wasm','.woff2':'font/woff2'};
+let deploy=0;
 const server=http.createServer(async(req,res)=>{
  try{
   const pathname=new URL(req.url,'http://localhost').pathname;
@@ -31,8 +32,11 @@ const server=http.createServer(async(req,res)=>{
    const file=path.resolve(dist,'.'+(pathname==='/'?'/index.html':pathname));
    if(!file.startsWith(dist+path.sep))throw Error('outside test root');
    data=await fs.readFile(file);type=types[path.extname(file)]||'application/octet-stream';
+   if(deploy&&pathname==='/sw.js')data=`${data}\n// deploy ${deploy}`;
+   if(deploy&&pathname==='/release.json')data=JSON.stringify({version:`deploy${deploy}`});
+   if(deploy&&type==='text/html')data=String(data).replace('<head>',`<head><meta name="deploy" content="${deploy}">`);
   }
-  res.writeHead(200,{'Content-Type':type,'Cache-Control':'no-store'});res.end(data);
+  res.writeHead(200,{'Content-Type':type,'Cache-Control':type==='text/html'?'max-age=600':'no-store'});res.end(data);
  }catch{res.writeHead(404);res.end();}
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -66,4 +70,16 @@ try{
  assert.match(await blocked.locator('#setup-error').textContent(),/older version/);
  await mismatch.close();
  console.log('Old cache bypassed; mismatched worker blocked; model files preserved: PASS');
+ const live=await browser.newContext();const tab=await live.newPage();
+ await tab.goto(base);await tab.waitForSelector('#intro-dialog[open]');
+ await tab.waitForFunction(()=>!!navigator.serviceWorker.controller);
+ assert.equal(await tab.locator('#update-banner').isVisible(),false);
+ deploy=1;
+ await tab.evaluate(async()=>(await navigator.serviceWorker.getRegistration()).update());
+ await tab.waitForSelector('#update-banner[open]');
+ await tab.click('#reload-update');
+ await tab.waitForSelector('meta[name="deploy"][content="1"]',{state:'attached'});
+ assert.equal(await tab.locator('#update-banner').isVisible(),false);
+ await live.close();
+ console.log('New deploy activates in open tabs, prompts reload, and serves fresh HTML: PASS');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

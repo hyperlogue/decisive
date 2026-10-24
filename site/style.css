@@ -289,6 +289,10 @@ pre { margin: 0; color: var(--text-2); font: 11px/1.65 ui-monospace,SFMono-Regul
 .share-controls > button { flex: 1; }
 .share-feedback { font-size: 12px; color: var(--muted); margin-top: 12px; text-align: center; }
 .share-feedback:empty, .native-unavailable { display: none !important; }
+.update-banner { position: fixed; inset: auto var(--gutter) max(16px,env(safe-area-inset-bottom)); z-index: 10; width: auto; }
+.update-banner::backdrop { background: transparent; }
+.update-banner[open] { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 480px; margin: 0 auto; padding: 10px 10px 10px 16px; font-size: 13px; font-weight: 500; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-lg); animation: rise-in .3s var(--ease-out) both; }
+.update-banner .primary-button { min-height: 36px; padding: 6px 14px; font-size: 13px; }
 .notice { margin: 12px var(--gutter) 0; padding: 12px 14px; font-size: 13px; border: 1px solid var(--red-line); border-radius: var(--radius-sm); }
 .error { color: var(--red); background: var(--red-wash); }
 

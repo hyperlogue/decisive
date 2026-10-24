@@ -160,7 +160,9 @@
     "getStarted": "Get started",
     "modelSizeDownload": "{size} download",
     "modelSizeStored": "{size} stored on this device",
-    "needsF16": "Needs 16-bit GPU support (shader-f16)"
+    "needsF16": "Needs 16-bit GPU support (shader-f16)",
+    "updateAvailable": "A new version is available.",
+    "reload": "Reload"
   },
   "es": {
     "onDevice": "Tus mensajes se quedan en este navegador.",
@@ -323,7 +325,9 @@
     "getStarted": "Empezar",
     "modelSizeDownload": "Descarga de {size}",
     "modelSizeStored": "{size} guardados en este dispositivo",
-    "needsF16": "Necesita GPU de 16 bits (shader-f16)"
+    "needsF16": "Necesita GPU de 16 bits (shader-f16)",
+    "updateAvailable": "Hay una nueva versión disponible.",
+    "reload": "Recargar"
   },
   "zh": {
     "onDevice": "你的消息只保留在此浏览器中。",
@@ -486,7 +490,9 @@
     "getStarted": "开始",
     "modelSizeDownload": "需下载 {size}",
     "modelSizeStored": "已在此设备存储 {size}",
-    "needsF16": "需要 16 位 GPU 支持（shader-f16）"
+    "needsF16": "需要 16 位 GPU 支持（shader-f16）",
+    "updateAvailable": "有新版本可用。",
+    "reload": "重新加载"
   },
   "ar": {
     "onDevice": "تبقى رسائلك في هذا المتصفح.",
@@ -649,6 +655,8 @@
     "getStarted": "ابدأ",
     "modelSizeDownload": "تنزيل {size}",
     "modelSizeStored": "{size} مخزنة على هذا الجهاز",
-    "needsF16": "يتطلب دعم GPU بدقة 16 بت (shader-f16)"
+    "needsF16": "يتطلب دعم GPU بدقة 16 بت (shader-f16)",
+    "updateAvailable": "يتوفر إصدار جديد.",
+    "reload": "إعادة التحميل"
   }
 }

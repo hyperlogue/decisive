@@ -381,5 +381,25 @@ try{
 capabilities=checked;paintSetup();paint();
 await refreshStorage();
 if(!openLegacyModels())intro.showModal();
-if('serviceWorker' in navigator)navigator.serviceWorker.register(new URL('./sw.js',document.baseURI),{scope:'./',updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker' in navigator){
+  let controlled=!!navigator.serviceWorker.controller;
+  const reloadWhenIdle=()=>{if(document.hidden&&!operation&&!input.value)location.reload();};
+  const release=/\/releases\/(\w+)\//.exec(import.meta.url)?.[1];
+  navigator.serviceWorker.addEventListener('controllerchange',async()=>{
+    if(!controlled){controlled=true;return;}
+    try{
+      const latest=(await fetch(new URL('./release.json',document.baseURI),{cache:'no-store'}).then(r=>r.json())).version;
+      if(!release||latest===release)return;
+    }catch{return;}
+    const banner=$('update-banner');
+    if(!banner.open){if(document.querySelector('dialog:modal'))banner.showModal();else banner.show();}
+    reloadWhenIdle();
+  });
+  navigator.serviceWorker.register(new URL('./sw.js',document.baseURI),{scope:'./',updateViaCache:'none'}).then(registration=>{
+    const check=()=>registration.update().catch(()=>{});
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)check();else if($('update-banner').open)reloadWhenIdle();});
+    setInterval(check,30*60*1000);
+  }).catch(()=>{});
+}
+$('reload-update').addEventListener('click',()=>location.reload());
 window.addEventListener('pagehide',()=>{if(shareUrl)URL.revokeObjectURL(shareUrl);});
