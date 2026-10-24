@@ -161,8 +161,9 @@ export class ModelStore {
     return Object.fromEntries(await Promise.all(this.entries.map(async ([name])=>
       [name, await (await dir.getFileHandle(encodeURIComponent(name))).getFile()])));
   }
-  // Read-only sync handles let inference read OPFS directly into WASM memory, several times faster
-  // than File reads. Without shared read-only handles, File objects are used instead.
+  // Sync handles let inference read OPFS directly into WASM memory, several times faster than File
+  // reads. Chromium shares read-only handles; Safari ignores the mode and locks each file, which still
+  // permits the getFile() calls storage inspection makes. If any handle fails, File objects are used.
   async readers(): Promise<{files: Record<string, File | SyncFile>; close(): void}> {
     const files = await this.files(), dir = (await this.directory())!, handles: SyncFile[] = [];
     const close = () => { for (const handle of handles.splice(0)) handle.close(); };
@@ -171,9 +172,6 @@ export class ModelStore {
       for (const [name] of this.entries) {
         const handle = await dir.getFileHandle(encodeURIComponent(name));
         readers[name] = await handle.createSyncAccessHandle({mode:'read-only'});handles.push(readers[name]);
-        // A second handle on the first file proves the browser shares read-only handles instead of
-        // taking an exclusive lock, which would block storage inspection.
-        if (handles.length === 1) (await handle.createSyncAccessHandle({mode:'read-only'})).close();
       }
       return {files:readers, close};
     } catch { close(); return {files, close() {}}; }
