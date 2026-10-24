@@ -76,20 +76,6 @@
       </div>
     </main>
   </div>
-    <dialog id="models-dialog" class="modal models-modal" aria-labelledby="models-title">
-        <div class="modal-heading"><h2 id="models-title" data-i18n="models">Models & storage</h2><button type="button" id="close-models" class="icon-button" data-title="close" aria-label="Close" autofocus><span data-icon="close"></span></button></div><div class="models-body"><div id="models-list" class="model-options compact" role="radiogroup" aria-labelledby="models-title"></div>
-        <div class="model-heading"><span data-icon="chip"></span><div><h3 id="model-name">Decima Small</h3><a id="model-source" href="https://huggingface.co/amyrmahdy/decima-small" target="_blank" rel="noopener noreferrer" data-i18n="modelSource">Model source ↗</a></div><span class="model-badge" id="model-badge"></span></div>
-        <dl class="storage-stats"><div><dt data-i18n="downloadSize">Full download</dt><dd id="model-total">—</dd></div><div><dt data-i18n="storedSize">Stored on device</dt><dd id="model-stored">—</dd></div><div><dt data-i18n="remainingSize">Still to download</dt><dd id="model-remaining">—</dd></div><div><dt data-i18n="verifiedSize">Verified</dt><dd id="model-verified">—</dd></div></dl>
-        <progress id="download-progress" value="0" max="1" aria-label="Download progress" data-aria="downloadProgress"></progress>
-        <p class="progress-message" id="download-status" role="status"></p>
-        <p class="notice error" id="model-error" role="alert" hidden></p>
-        <div class="model-actions"><button id="download-model" class="primary-button" data-i18n="downloadModel">Download model</button><button id="pause-download" class="secondary-button" data-i18n="pause" hidden>Pause</button><button id="use-model" class="primary-button" data-i18n="useModel" hidden>Use model</button><button id="delete-model" class="secondary-button danger" data-i18n="deleteModel">Delete model files</button></div>
-        <p class="explanation" data-i18n="downloadNote"></p>
-        <details id="model-files-details" class="file-details" open><summary data-i18n="modelFiles">Model files</summary><ul id="model-files" class="model-files"></ul></details>
-        <div id="legacy-model" class="storage-section" hidden><h3 data-i18n="legacyModel">Previous Pplx files</h3><p id="legacy-size" class="explanation"></p><button id="delete-legacy" class="secondary-button danger" data-i18n="deleteLegacy">Delete previous files</button></div><div class="storage-section"><h3 data-i18n="browserStorage">Browser storage</h3><p id="storage-estimate" class="explanation"></p><p id="persistence-status" class="explanation"></p><button id="keep-model" class="secondary-button" data-i18n="keepModel">Keep files on this device</button><p class="explanation" data-i18n="storageNote"></p></div>
-        <p class="revision-note">Revision <code id="model-revision"></code></p>
-      </div>
-  </dialog>
   <dialog id="intro-dialog" class="modal intro-modal" aria-labelledby="intro-title">
     <div class="modal-heading"><h2 id="intro-title" data-i18n="introTitle">How this demo works</h2><button type="button" class="icon-button" id="close-intro" data-title="close" aria-label="Close"><span data-icon="close"></span></button></div>
     <p class="modal-description" data-i18n="introGoal"></p>
@@ -103,15 +89,12 @@
   </dialog>
   <dialog id="setup-dialog" class="modal setup-modal" aria-labelledby="setup-title">
     <div class="modal-heading"><h2 id="setup-title" data-i18n="chooseModel">Choose model</h2><button type="button" class="icon-button" id="close-setup" data-title="close" aria-label="Close"><span data-icon="close"></span></button></div>
-    <p class="modal-description" data-i18n="onDevice">Your messages stay in this browser.</p>
+    <p id="setup-error" class="notice error setup-error" role="alert" hidden><span data-icon="alert"></span><span id="setup-error-text"></span></p>
     <div id="setup-models" class="model-options" role="radiogroup" aria-labelledby="setup-title"></div>
     <p class="progress-message" id="setup-status" role="status"></p>
-    <div class="webgpu-status"><span>WebGPU</span><span id="cap-gpu" role="status">Checking…</span></div>
-    <p class="explanation" data-i18n="webgpuRequired">This page requires WebGPU to work.</p>
-    <p class="setup-note" data-i18n="downloadNote"></p>
-    <p id="setup-error" class="notice error" role="alert" hidden></p>
-    <div class="modal-actions"><button type="button" id="setup-download" class="secondary-button"><span id="setup-download-label"></span></button><button type="button" id="setup-pause" class="secondary-button" data-i18n="pause" hidden>Pause</button><button type="button" id="start-analysis" class="primary-button" autofocus data-i18n="useModel">Use model</button></div>
-    <button id="manage-models" class="text-button" data-i18n="models">Models & storage</button>
+    <p id="legacy-model" class="legacy-note" hidden><span id="legacy-size"></span><button type="button" id="delete-legacy" class="link-button" data-i18n="deleteLegacy">Delete previous files</button></p>
+    <p class="setup-note"><span data-i18n="downloadNote"></span> <span data-i18n="onDevice">Your messages stay in this browser.</span></p>
+    <div class="modal-actions"><button type="button" id="stop-model" class="secondary-button" data-i18n="stop" hidden>Stop analysis</button><button type="button" id="start-analysis" class="primary-button" autofocus data-i18n="useModel">Use model</button></div>
   </dialog>
   <dialog id="share-dialog" class="modal share-modal" aria-labelledby="share-title">
     <div class="modal-heading"><h2 id="share-title" data-i18n="shareTitle">Share image</h2><button type="button" class="icon-button" id="close-share" data-title="close" aria-label="Close"><span data-icon="close"></span></button></div>
@@ -119,7 +102,7 @@
     <div class="share-controls"><button type="button" class="secondary-button" id="download-image"><span data-icon="download"></span><span data-i18n="download">Download PNG</span></button><button type="button" class="primary-button" id="native-share"><span data-icon="share"></span><span data-i18n="shareImage">Share image</span></button></div>
     <p id="share-feedback" class="share-feedback" role="status"></p>
   </dialog>
-  <dialog id="delete-dialog" class="modal" aria-labelledby="delete-title"><div class="modal-heading"><h2 id="delete-title" data-i18n="deleteModel">Delete model files</h2></div><p id="delete-description" class="setup-note"></p><div class="modal-actions"><button id="cancel-delete" class="secondary-button" data-i18n="cancel">Cancel</button><button id="confirm-delete" class="primary-button danger-fill" data-i18n="deleteModel">Delete model files</button></div></dialog>
+  <dialog id="delete-dialog" class="modal confirm-modal" aria-labelledby="delete-title"><div class="modal-heading"><h2 id="delete-title" data-i18n="deleteModel">Delete model files</h2></div><p id="delete-description" class="setup-note"></p><div class="modal-actions"><button id="cancel-delete" class="secondary-button" data-i18n="cancel">Cancel</button><button id="confirm-delete" class="primary-button danger-fill" data-i18n="deleteModel">Delete model files</button></div></dialog>
   <dialog id="update-banner" class="update-banner" aria-labelledby="update-text"><span id="update-text" data-i18n="updateAvailable">A new version is available.</span><button type="button" id="reload-update" class="primary-button" data-i18n="reload">Reload</button></dialog>
   <noscript>This demo needs JavaScript and WebGPU to run analysis on your device.</noscript>
   <script type="module" src="./app.js"></script>

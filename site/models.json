@@ -42,7 +42,7 @@
     },
     {
       "id": "pplx-flash-q4",
-      "name": "Pplx Flash · Q4",
+      "name": "pplx-decider-flash-v1.2-q4",
       "engine": "pplx-q4",
       "available": true,
       "storeName": "decisive-privacy-pplx-q4-v1",

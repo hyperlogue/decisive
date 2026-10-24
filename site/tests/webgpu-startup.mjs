@@ -24,9 +24,9 @@ try{
     });
     const page=await context.newPage();
     await page.goto(base);await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
-    const first=await page.locator('#cap-gpu').textContent();
+    const first=await page.evaluate(()=>/WebGPU/.test(document.getElementById('setup-error').textContent)&&!document.getElementById('setup-error').hidden?'Not available':'Available');
     await page.reload();await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
-    const afterRefresh=await page.locator('#cap-gpu').textContent();
+    const afterRefresh=await page.evaluate(()=>/WebGPU/.test(document.getElementById('setup-error').textContent)&&!document.getElementById('setup-error').hidden?'Not available':'Available');
     observations.push({failure,first,afterRefresh});
     await context.close();
   }

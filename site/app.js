@@ -13,7 +13,7 @@ const catalog=await fetch(new URL('./models.json',import.meta.url)).then(r=>r.js
 let manifest=selectModel(catalog);
 let lang='en', ready=false, pending=false, result=null, operation=null, analysisError=null, modelError=null;
 let progress=null, selected=null, shareBlob=null, shareUrl=null, signalIds=new Set(), exporting=false, loadEpoch=0;
-let capabilities=null, estimate=null, persisted=false, persistenceDenied=false, compatibleWorker=false;
+let capabilities=null, estimate=null, compatibleWorker=false;
 const states=Object.fromEntries(catalog.models.map(model=>[model.id,emptyModelState(model)]));
 let statusKey='', storeState=states[manifest.id], deleteTarget=manifest.id;
 const setState=(id,state)=>{states[id]=state;if(id===manifest.id)storeState=state;};
@@ -25,7 +25,7 @@ const fileBytes=n=>n>=1e9?bytes(n):n<1000?
 const errorKey=e=>strings.en[e?.message]?e.message:'storageFailed';
 const shortOnStorage=()=>!storeState.ready&&estimate?.quota&&estimate.usage!=null&&
   estimate.quota-estimate.usage<storeState.remaining+16*1024*1024;
-const input=$('message-input'),intro=$('intro-dialog'),setup=$('setup-dialog'),shareDialog=$('share-dialog'),models=$('models-dialog');
+const input=$('message-input'),intro=$('intro-dialog'),setup=$('setup-dialog'),shareDialog=$('share-dialog');
 const precisionReady=()=>!manifest.requiredFeatures?.includes('shader-f16')||capabilities?.shaderF16;
 const canRun=()=>!!(compatibleWorker&&manifest.available&&capabilities?.gpu&&precisionReady()&&capabilities?.simd&&capabilities?.storage&&capabilities?.secure);
 const setupIssue=()=>!manifest.available?'modelComingSoon':!capabilities?null:!capabilities.gpu?'webgpuUnavailable':
@@ -40,18 +40,19 @@ for(const c of categories){
   $('score-list').append(row);scoreRows.set(c.id,row);
 }
 const modelOptions=[];
-for(const [container,removable] of [['setup-models',true],['models-list',false]])for(const model of catalog.models){
+for(const model of catalog.models){
   const card=document.createElement('div');card.className='model-option';card.dataset.model=model.id;
-  card.innerHTML=`<button type="button" class="model-pick" role="radio"><span class="model-option-icon">${icon('chip')}</span><span class="model-option-text"><strong class="model-option-name"></strong><span class="model-option-size"></span><span class="model-option-note"></span></span><span class="model-badge"></span></button><progress max="1" value="0" hidden></progress>`;
+  card.innerHTML=`<button type="button" class="model-pick" role="radio" aria-labelledby="model-name-${model.id}"></button><span class="model-radio" aria-hidden="true"></span><span class="model-option-text"><strong class="model-option-name" id="model-name-${model.id}"></strong><span class="model-option-meta"><span class="model-option-size"></span><a class="model-link" target="_blank" rel="noopener noreferrer">Hugging Face ↗</a></span></span><span class="model-option-actions"><span class="model-badge" aria-describedby="model-tip-${model.id}"></span><span class="model-tip" id="model-tip-${model.id}" role="tooltip"></span><button type="button" class="icon-button model-delete">${icon('trash')}</button><button type="button" class="secondary-button model-download">${icon('download')}<span></span></button></span><progress max="1" value="0" hidden></progress>`;
   card.querySelector('.model-pick').addEventListener('click',()=>changeModel(model.id));
-  if(removable){
-    const remove=document.createElement('button');remove.type='button';remove.className='icon-button model-delete';remove.innerHTML=icon('trash');
-    remove.addEventListener('click',()=>confirmDelete(model.id));card.append(remove);
-  }
-  $(container).append(card);modelOptions.push({card,model});
+  card.querySelector('.model-delete').addEventListener('click',()=>confirmDelete(model.id));
+  const link=card.querySelector('.model-link');
+  if(model.repository)link.href=`https://huggingface.co/${model.repository}/tree/${model.revision}`;else link.hidden=true;
+  card.querySelector('.model-download').addEventListener('click',async()=>{
+    if(operation==='download'&&model.id===manifest.id){await client.call('pause');return;}
+    await changeModel(model.id);download();
+  });
+  $('setup-models').append(card);modelOptions.push({card,model});
 }
-const stopButton=document.createElement('button');stopButton.id='stop-model';stopButton.className='secondary-button';stopButton.dataset.i18n='stop';
-$('delete-model').before(stopButton);
 
 const client=new WorkerClient(event=>{
   if(event.event==='fatal'){
@@ -157,80 +158,49 @@ function paint(){
     analysisError?{error:analysisError.detail??t(errorKey(analysisError))}:{status:t(empty)},null,2);
 }
 function paintSetup(){
-  $('cap-gpu').textContent=t(!capabilities?'checking':capabilities.gpu?'supported':'unsupported');
-  $('cap-gpu').className=!capabilities?'checking':capabilities.gpu?'':'unavailable';
   paintModelOptions();
-  document.querySelectorAll('[data-i18n="downloadNote"]').forEach(el=>el.textContent=t(manifest.available?'downloadNote':'modelComingSoon',{size:fileBytes(storeState.total)}));
-  const issue=!compatibleWorker&&modelError?.message==='versionMismatch'?'versionMismatch':setupIssue();
-  $('setup-error').hidden=!issue||issue==='modelComingSoon';
-  $('setup-error').textContent=issue?t(issue):'';
+  document.querySelectorAll('[data-i18n="downloadNote"]').forEach(el=>el.textContent=t(manifest.available?'downloadNote':'modelComingSoon'));
+  const issue=modelError?errorKey(modelError):setupIssue();
+  $('setup-error').hidden=!issue||issue==='modelComingSoon'||issue==='gpuPrecisionRequired';
+  $('setup-error-text').textContent=issue?t(issue):'';
+  $('legacy-model').hidden=!storeState.legacyStored;
+  $('legacy-size').textContent=t('legacyNote',{size:fileBytes(storeState.legacyStored??0)});
+  $('delete-legacy').disabled=!!operation;
   $('start-analysis').disabled=!storeState.ready||!canRun()||!!operation;
   $('start-analysis').textContent=t(manifest.available?'useModel':'comingSoon');
-  $('setup-download').hidden=!manifest.available||storeState.ready||operation==='download';
-  $('setup-download').disabled=!!operation||!canRun()||!!shortOnStorage();
-  $('setup-download-label').textContent=t(storeState.stored?'resumeDownload':'downloadModel');
-  $('setup-pause').hidden=operation!=='download';
+  $('stop-model').hidden=operation!=='inference'&&operation!=='loading';
 }
 function paintModelOptions(){
   for(const {card,model} of modelOptions){
     const state=states[model.id],chosen=model.id===manifest.id,pick=card.querySelector('.model-pick');
-    card.classList.toggle('selected',chosen);card.classList.toggle('ready',state.ready);
-    pick.setAttribute('aria-checked',String(chosen));pick.disabled=!!operation&&!chosen;
+    const reason=!capabilities?null:!capabilities.gpu?'webgpuUnavailable':model.requiredFeatures?.includes('shader-f16')&&!capabilities.shaderF16?'needsF16':null;
+    const blocked=model.available&&!!reason;
+    const downloading=chosen&&operation==='download';
+    card.classList.toggle('selected',chosen);card.classList.toggle('ready',state.ready);card.classList.toggle('blocked',blocked);
+    pick.setAttribute('aria-checked',String(chosen));pick.disabled=blocked||!!operation&&!chosen;
     card.querySelector('.model-option-name').textContent=model.name;
     card.querySelector('.model-option-size').textContent=!model.available?t('sizePending'):
       state.ready?t('modelSizeStored',{size:fileBytes(state.total)}):
       state.stored?t('setupSize',{size:fileBytes(state.total),stored:fileBytes(state.stored)}):t('modelSizeDownload',{size:fileBytes(state.total)});
-    const note=card.querySelector('.model-option-note'),f16=model.requiredFeatures?.includes('shader-f16');
-    note.textContent=f16?t('needsF16'):'';note.hidden=!f16;note.classList.toggle('unavailable',f16&&!!capabilities&&!capabilities.shaderF16);
-    card.querySelector('.model-badge').textContent=t(!model.available?'comingSoon':state.ready?'ready':state.stored?'partial':'missing');
-    const bar=card.querySelector('progress');bar.hidden=!(chosen&&operation==='download');bar.max=state.total||1;bar.value=state.total-state.remaining;
+    const badge=card.querySelector('.model-badge');
+    badge.hidden=model.available&&!state.ready&&!blocked;badge.textContent=t(!model.available?'comingSoon':blocked?'disabled':'ready');
+    badge.tabIndex=blocked?0:-1;card.querySelector('.model-tip').textContent=blocked?t(reason,{model:model.name}):'';
+    const bar=card.querySelector('progress');bar.hidden=!downloading;bar.max=state.total||1;bar.value=state.total-state.remaining;
     const remove=card.querySelector('.model-delete');
-    if(remove){remove.hidden=!state.stored;remove.disabled=!!operation;remove.title=t('deleteModel');remove.setAttribute('aria-label',`${t('deleteModel')} · ${model.name}`);}
+    remove.hidden=!state.stored||downloading;remove.disabled=!!operation;remove.title=t('deleteModel');remove.setAttribute('aria-label',`${t('deleteModel')} · ${model.name}`);
+    const get=card.querySelector('.model-download'),label=t(downloading?'pause':state.stored?'resume':'downloadShort');
+    get.hidden=!model.available||state.ready||blocked;
+    get.disabled=!downloading&&(!!operation||blocked||!compatibleWorker||!capabilities?.gpu||!capabilities.simd||!capabilities.storage||!capabilities.secure||chosen&&!!shortOnStorage());
+    get.querySelector('span').textContent=label;get.setAttribute('aria-label',`${label} · ${model.name}`);
+    card.querySelector('.model-link').title=t('modelSource');
   }
 }
 function paintStorage(){
-  for(const [id,key] of [['model-total','total'],['model-stored','stored'],['model-remaining','remaining'],['model-verified','verified']]){
-    $(id).textContent=!manifest.available&&key!=='stored'?t('sizePending'):fileBytes(storeState[key]);
-    $(id).title=new Intl.NumberFormat(lang).format(storeState[key])+' bytes';
-    $(id).closest('div').hidden=!manifest.available&&['remaining','verified'].includes(key);
-    $(id).classList.toggle('pending-size',!manifest.available&&key==='total');
-    if(!manifest.available&&key==='total')$(id).removeAttribute('title');
-  }
-  $('model-name').textContent=manifest.name;$('runtime-model').textContent=manifest.name;
-  $('model-source').hidden=!manifest.repository;
-  if(manifest.repository)$('model-source').href=`https://huggingface.co/${manifest.repository}/tree/${manifest.revision}`;else $('model-source').removeAttribute('href');
-  $('model-files-details').hidden=!manifest.available;
-  $('legacy-model').hidden=!storeState.legacyStored;
-  $('legacy-size').textContent=t('legacyNote',{size:fileBytes(storeState.legacyStored??0)});
-  $('delete-legacy').disabled=!!operation;
-  $('model-revision').textContent=manifest.revision??'—';
-  $('model-badge').textContent=t(!manifest.available?'comingSoon':storeState.ready?'ready':storeState.stored?'partial':'missing');
-  $('download-progress').max=storeState.total;$('download-progress').value=storeState.total-storeState.remaining;
-  $('download-progress').hidden=!manifest.available;
-  $('download-model').closest('.model-actions').hidden=!manifest.available&&!storeState.stored;
-  let message=statusKey?t(statusKey):storeState.ready?t('readyDownload'):'';
-  if(operation==='download'&&progress?.name)message=`${t(progress.phase)} · ${progress.name} · ${fileBytes(progress.bytes)} / ${fileBytes(progress.total)}`;
+  $('runtime-model').textContent=manifest.name;
+  let message=statusKey?t(statusKey):'';
+  if(operation==='download')message='';
   if(operation==='loading')message=t('loading');
-  $('download-status').textContent=message;$('setup-status').textContent=message;
-  const issue=setupIssue();
-  $('model-error').hidden=!modelError&&(!issue||issue==='modelComingSoon');
-  $('model-error').textContent=modelError?t(errorKey(modelError)):issue?t(issue):'';
-  $('download-model').hidden=!manifest.available||storeState.ready||operation==='download';
-  $('download-model').disabled=!!operation||!canRun()||!!shortOnStorage();
-  $('download-model').textContent=t(storeState.stored?'resumeDownload':'downloadModel');
-  $('pause-download').hidden=operation!=='download';
-  $('use-model').hidden=!storeState.ready;$('use-model').disabled=!!operation||!canRun();
-  $('delete-model').disabled=!!operation||!storeState.stored;
-  stopButton.hidden=operation!=='inference'&&operation!=='loading';
-  $('model-files').replaceChildren();
-  for(const f of storeState.files){
-    const li=document.createElement('li'),name=document.createElement('span'),size=document.createElement('span'),status=document.createElement('span');
-    name.className='file-name';name.textContent=f.name;size.textContent=`${fileBytes(f.bytes)} / ${fileBytes(f.expected)}`;status.textContent=t(f.state);status.className=f.verified?'file-verified':'muted';
-    li.append(name,size,status);$('model-files').append(li);
-  }
-  $('storage-estimate').textContent=estimate?.quota?t('estimate',{used:bytes(estimate.usage??0),quota:bytes(estimate.quota)}):t('estimateUnavailable');
-  $('persistence-status').textContent=t(persisted?'persisted':persistenceDenied?'persistDenied':'notPersisted');
-  $('keep-model').disabled=persisted||!navigator.storage?.persist;
+  $('setup-status').textContent=message;
   paintSetup();
 }
 async function refreshStorage(){
@@ -246,32 +216,33 @@ async function refreshStorage(){
         try{states[model.id]=validateModelState(model,await client.call('inspect',{modelId:model.id}));}catch{}
       }
     }
-    estimate=await navigator.storage?.estimate?.();persisted=await navigator.storage?.persisted?.()??false;
+    estimate=await navigator.storage?.estimate?.();
   }catch(error){if(selected!==manifest)return;modelError=error;if(error.message==='versionMismatch')compatibleWorker=false;}
   paintStorage();
 }
-function openModels(){
-  setup.close();intro.close();
-  if(!models.open)models.showModal();
+function openSetup(){
+  intro.close();paintSetup();
+  if(!setup.open)setup.showModal();
   refreshStorage();
 }
 function openLegacyModels(){
   if(location.hash!=='#models')return false;
   history.replaceState(null,'',location.pathname+location.search);
-  openModels();
+  openSetup();
   return true;
 }
 async function download(){
   if(operation||!canRun()||shortOnStorage())return;
   ready=false;scheduler.setEnabled(false);operation='download';modelError=null;statusKey='';progress=null;paint();paintStorage();
-  try{setState(manifest.id,validateModelState(manifest,await client.call('download',{modelId:manifest.id})));statusKey='readyDownload';}
+  navigator.storage?.persist?.().catch(()=>{});
+  try{setState(manifest.id,validateModelState(manifest,await client.call('download',{modelId:manifest.id})));statusKey='';}
   catch(error){if(error.message==='paused')statusKey='paused';else modelError=error;}
   finally{operation=null;progress=null;await refreshStorage();paint();}
 }
 async function load(){
   if(operation||!canRun())return;
   const epoch=++loadEpoch;
-  setup.close();models.close();ready=false;scheduler.setEnabled(false);operation='loading';progress=null;analysisError=null;paint();paintStorage();
+  setup.close();ready=false;scheduler.setEnabled(false);operation='loading';progress=null;analysisError=null;paint();paintStorage();
   try{
     await client.call('load',{modelId:manifest.id});
     if(epoch===loadEpoch){ready=true;scheduler.setEnabled(true);}
@@ -293,24 +264,13 @@ async function changeModel(id){
 input.addEventListener('input',()=>{analysisError=null;scheduler.update(input.value);});
 $('language-picker').addEventListener('change',e=>{lang=e.target.value;paintLanguage();});
 $('analysis-details').addEventListener('toggle',()=>{$('details-label').textContent=t($('analysis-details').open?'hideDetails':'showDetails');});
-$('open-setup').addEventListener('click',()=>{paintSetup();setup.showModal();});
-stopButton.addEventListener('click',stop);
+$('open-setup').addEventListener('click',openSetup);
 $('close-setup').addEventListener('click',()=>setup.close());
 $('close-intro').addEventListener('click',()=>intro.close());
-$('intro-continue').addEventListener('click',()=>{intro.close();paintSetup();setup.showModal();});
-$('manage-models').addEventListener('click',openModels);
-$('close-models').addEventListener('click',()=>models.close());
-models.addEventListener('close',()=>$('open-setup').focus({preventScroll:true}));
+$('intro-continue').addEventListener('click',openSetup);
 $('start-analysis').addEventListener('click',load);
-for(const id of ['download-model','setup-download'])$(id).addEventListener('click',()=>download());
-$('use-model').addEventListener('click',load);
-for(const id of ['pause-download','setup-pause'])$(id).addEventListener('click',async()=>{$(id).disabled=true;await client.call('pause');$(id).disabled=false;});
-$('keep-model').addEventListener('click',async()=>{
-  try{persisted=await navigator.storage.persist();persistenceDenied=!persisted;}catch{persistenceDenied=true;}
-  paintStorage();
-});
-function confirmDelete(id){deleteTarget=id;$('delete-description').textContent=t('deleteDescription',{size:bytes(states[id].stored)});$('delete-dialog').showModal();}
-$('delete-model').addEventListener('click',()=>confirmDelete(manifest.id));
+$('stop-model').addEventListener('click',stop);
+function confirmDelete(id){deleteTarget=id;$('delete-description').textContent=t('deleteDescription',{size:fileBytes(states[id].stored)});$('delete-dialog').showModal();}
 $('delete-legacy').addEventListener('click',()=>{deleteTarget='legacy';$('delete-description').textContent=t('deleteLegacyDescription',{size:fileBytes(storeState.legacyStored)});$('delete-dialog').showModal();});
 $('cancel-delete').addEventListener('click',()=>$('delete-dialog').close());
 $('confirm-delete').addEventListener('click',async()=>{
@@ -328,7 +288,7 @@ const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('decisiv
 channel?.addEventListener('message',async()=>{
   if(!operation){await refreshStorage();if(!storeState.ready){ready=false;scheduler.setEnabled(false);paint();}}
 });
-window.addEventListener('focus',()=>{if(models.open&&!operation)refreshStorage();});
+window.addEventListener('focus',()=>{if(setup.open&&!operation)refreshStorage();});
 
 const privacy=$('privacy-help'),tooltip=$('privacy-tooltip');let privacyPinned=false;
 function togglePrivacy(open){tooltip.hidden=!open;privacy.setAttribute('aria-expanded',String(open));}

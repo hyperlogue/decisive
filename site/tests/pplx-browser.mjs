@@ -43,7 +43,7 @@ try{
   });
   await page.click('#setup-models [data-model="pplx-flash-q4"] .model-pick');
   assert.equal(await page.locator('#start-analysis').isDisabled(),true);
-  await page.click('#setup-download');
+  await page.click('#setup-models [data-model="pplx-flash-q4"] .model-download');
   await page.waitForFunction(()=>!document.getElementById('start-analysis').disabled);
   await page.click('#start-analysis');
   await page.waitForFunction(()=>document.getElementById('composer-status').textContent==='Updates as you type');
@@ -72,11 +72,12 @@ try{
   }
   await page.fill('#message-input','cancel this inference');await page.click('#open-setup');await page.click('#start-analysis');
   await page.waitForFunction(()=>document.getElementById('composer-status').textContent.includes('Layer'));
-  await page.click('#open-setup');await page.click('#manage-models');await page.click('#stop-model');
-  await page.waitForFunction(()=>document.getElementById('stop-model').hidden&&!document.getElementById('delete-model').disabled);
+  const q4='#setup-models [data-model="pplx-flash-q4"]';
+  await page.click('#open-setup');await page.click('#stop-model');
+  await page.waitForFunction(sel=>document.getElementById('stop-model').hidden&&!document.querySelector(sel).disabled,`${q4} .model-delete`);
   assert.equal(await page.locator('#share-result').isDisabled(),true);
-  await page.click('#delete-model');await page.click('#confirm-delete');
-  await page.waitForFunction(()=>document.getElementById('model-badge').textContent==='Not downloaded');
+  await page.click(`${q4} .model-delete`);await page.click('#confirm-delete');
+  await page.waitForFunction(sel=>!document.querySelector(sel).hidden,`${q4} .model-download`);
   const kept=await page.evaluate(async()=>{
     const root=await navigator.storage.getDirectory();
     const dir=await root.getDirectoryHandle('decisive-privacy-decima-small-v1');
