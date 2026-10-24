@@ -1,6 +1,6 @@
 export interface Hasher { update(bytes: Uint8Array): void; finish(): string; free?(): void }
 interface SyncFile { getSize(): number; read(bytes: Uint8Array, options: {at:number}): number; write(bytes: Uint8Array, options: {at:number}): number; truncate(size:number): void; flush(): void; close(): void }
-interface FileHandle { kind:'file'; getFile(): Promise<File>; createSyncAccessHandle(): Promise<SyncFile> }
+interface FileHandle { kind:'file'; getFile(): Promise<File>; createSyncAccessHandle(options?: {mode?: 'readwrite' | 'read-only'}): Promise<SyncFile> }
 export interface StorageDirectory { kind:'directory'; getDirectoryHandle(name:string, options?:{create?:boolean}): Promise<StorageDirectory>; getFileHandle(name:string, options?:{create?:boolean}): Promise<FileHandle>; entries(): AsyncIterableIterator<[string,FileHandle|StorageDirectory]>; removeEntry(name:string,options:{recursive:boolean}): Promise<void> }
 interface FileSpec { bytes:number; sha256:string }
 interface Manifest { repository:string; revision:string; files:Record<string,FileSpec> }
@@ -160,6 +160,23 @@ export class ModelStore {
     const dir = (await this.directory())!;
     return Object.fromEntries(await Promise.all(this.entries.map(async ([name])=>
       [name, await (await dir.getFileHandle(encodeURIComponent(name))).getFile()])));
+  }
+  // Read-only sync handles let inference read OPFS directly into WASM memory, several times faster
+  // than File reads. Without shared read-only handles, File objects are used instead.
+  async readers(): Promise<{files: Record<string, File | SyncFile>; close(): void}> {
+    const files = await this.files(), dir = (await this.directory())!, handles: SyncFile[] = [];
+    const close = () => { for (const handle of handles.splice(0)) handle.close(); };
+    try {
+      const readers: Record<string, SyncFile> = {};
+      for (const [name] of this.entries) {
+        const handle = await dir.getFileHandle(encodeURIComponent(name));
+        readers[name] = await handle.createSyncAccessHandle({mode:'read-only'});handles.push(readers[name]);
+        // A second handle on the first file proves the browser shares read-only handles instead of
+        // taking an exclusive lock, which would block storage inspection.
+        if (handles.length === 1) (await handle.createSyncAccessHandle({mode:'read-only'})).close();
+      }
+      return {files:readers, close};
+    } catch { close(); return {files, close() {}}; }
   }
   async remove() {
     try { await this.root.removeEntry(this.storeName, {recursive:true}); }

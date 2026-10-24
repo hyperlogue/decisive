@@ -1,6 +1,6 @@
-import type {Selection} from '@decisive/browser/types.js';
+import type {Selection, SyncReader} from '@decisive/browser/types.js';
 
-export function inferenceConfig(model: {engine:string}, files: Record<string, Blob | Uint8Array>): Selection {
+export function inferenceConfig(model: {engine:string}, files: Record<string, Blob | Uint8Array | SyncReader>): Selection {
   const source = {files};
   switch (model.engine) {
     case 'decima': return {model:'decima', backend:'webgpu', source, parameters:{long:true}};

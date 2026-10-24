@@ -11,12 +11,14 @@ export interface Registry {
   kev: { wasm: EmptyParameters };
   'jev-style': { wasm: EmptyParameters };
 }
+export interface SyncReader { getSize(): number; read(buffer: Uint8Array, options: { at: number }): number }
 export type Family = keyof Registry;
 export type Backend<M extends Family> = keyof Registry[M] & string;
 export interface LoadOptions<M extends Family, B extends Backend<M>> {
   model: M;
   backend: B;
-  source: { files: Record<string, Blob | Uint8Array> };
+  // A sync reader, such as an OPFS FileSystemSyncAccessHandle in a worker, avoids async Blob reads.
+  source: { files: Record<string, Blob | Uint8Array | SyncReader> };
   format?: string;
   parameters?: Registry[NoInfer<M>][NoInfer<B>];
   tuning?: { mode?: 'auto' | 'off'; budgetMs?: number };

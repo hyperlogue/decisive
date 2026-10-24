@@ -16,6 +16,7 @@ let catalogPromise: Promise<{default:string;models:CatalogModel[]}> | undefined;
 let apiPromise: Promise<API> | null = null;
 let engine: Predictor | null = null, inferenceCache: OpaqueCache | undefined;
 let activeModel: string | null = null, busy = false, cancellation: AbortController | null = null;
+let closeReaders = () => {};
 const stores = new Map<string, Promise<ModelStore>>();
 const notify = (value: Record<string, unknown> = {}) => self.postMessage({event:'progress', ...value});
 const broadcast = typeof BroadcastChannel === 'function' ? new BroadcastChannel('decisive-privacy-storage') : null;
@@ -66,6 +67,7 @@ async function locked<T>(mode: LockMode, task: () => Promise<T>): Promise<T> {
 }
 async function unload() {
   await engine?.dispose();
+  closeReaders(); closeReaders = () => {};
   inferenceCache = undefined;
   engine = null; activeModel = null;
 }
@@ -123,7 +125,11 @@ const methods: Record<string, (args: Args) => Promise<unknown>> = {
       await requireModelGPU(model);
       notify({phase:'loading'});
       loadedApi=await api();
-      const files=await (await store(model.id)).files();
+      const cache=await store(model.id);
+      // Pplx streams its layers on every request, so it reads OPFS through sync handles when available.
+      let files: Awaited<ReturnType<ModelStore['readers']>>['files'];
+      if (model.engine.startsWith('pplx-')) { const readers=await cache.readers(); files=readers.files; closeReaders=readers.close; }
+      else files=await cache.files();
       engine = await loadModelInWorker(loadedApi, inferenceConfig(model, files), {
         signal: cancellation!.signal,
         onProgress: (event: Progress) => notify({phase: activeModel ? 'analyzing' : 'loading',

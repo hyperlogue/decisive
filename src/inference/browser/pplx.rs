@@ -34,6 +34,8 @@ struct Group {
 }
 struct Reading {
     promises: js_sys::Array,
+    // Group index and byte offset within the group of each promised piece.
+    pieces: Vec<(usize, usize)>,
 }
 impl Reading {
     async fn drain(self) {
@@ -145,6 +147,7 @@ pub(super) struct Runtime {
     row_bytes: usize,
     norm: Vec<u8>,
     reading: Option<Reading>,
+    scratch: Vec<u8>,
     tuning: bool,
 }
 impl Runtime {
@@ -363,6 +366,7 @@ impl Runtime {
             row_bytes,
             norm,
             reading: None,
+            scratch: Vec::new(),
             tuning,
         })
     }
@@ -371,15 +375,16 @@ impl Runtime {
     }
     fn prefetch(&self, layer: usize) -> Result<Reading> {
         let promises = js_sys::Array::new();
-        for group in &self.layers[layer] {
-            promises.push(
-                &self
-                    .source
-                    .start(&group.file, group.start, group.end)?
-                    .into(),
-            );
+        let mut pieces = Vec::new();
+        for (index, group) in self.layers[layer].iter().enumerate() {
+            // Sync handles are read directly into the staging buffer during upload.
+            if self.source.sync(&group.file)?.is_some() {
+                continue;
+            }
+            promises.push(&self.source.start(&group.file, group.start, group.end)?.into());
+            pieces.push((index, 0));
         }
-        Ok(Reading { promises })
+        Ok(Reading { promises, pieces })
     }
     async fn upload(&mut self, layer: usize, reading: Reading) -> Result<()> {
         let result = js_sys::Array::from(
@@ -387,24 +392,52 @@ impl Runtime {
                 .await
                 .map_err(from_js)?,
         );
-        for (i, group) in self.layers[layer].iter().enumerate() {
-            let bytes = js_sys::Uint8Array::new(&result.get(i as u32)).to_vec();
-            if bytes.len() as u64 != group.end - group.start {
-                return Err(Error::new("INVALID_CHECKPOINT", "Incomplete layer read"));
+        let Self {
+            layers,
+            buffers,
+            model,
+            source,
+            scratch,
+            ..
+        } = self;
+        let mut piece = 0;
+        for (index, group) in layers[layer].iter().enumerate() {
+            let length = (group.end - group.start) as usize;
+            // One reused staging buffer keeps streamed layers from churning the WASM heap.
+            if scratch.len() < length {
+                scratch.resize(length, 0);
+            }
+            let bytes = &mut scratch[..length];
+            if !source.read_into(&group.file, group.start, bytes)? {
+                let mut filled = 0;
+                while reading.pieces.get(piece).is_some_and(|&(i, _)| i == index) {
+                    let offset = reading.pieces[piece].1;
+                    let array = js_sys::Uint8Array::new(&result.get(piece as u32));
+                    let end = offset + array.length() as usize;
+                    if offset != filled || end > length {
+                        return Err(Error::new("INVALID_CHECKPOINT", "Incomplete layer read"));
+                    }
+                    array.copy_to(&mut bytes[offset..end]);
+                    filled = end;
+                    piece += 1;
+                }
+                if filled != length {
+                    return Err(Error::new("INVALID_CHECKPOINT", "Incomplete layer read"));
+                }
             }
             for range in &group.ranges {
                 let bytes = &bytes
                     [(range.start - group.start) as usize..(range.end - group.start) as usize];
-                if let Some(buffers) = &self.buffers {
+                if let Some(buffers) = buffers {
                     buffers
                         .stage_tensor(layer, &range.name, bytes)
                         .map_err(from_js)?;
-                } else if let Executor::Cpu(model) = &mut self.model {
+                } else if let Executor::Cpu(model) = model {
                     model.tensor(&range.name, bytes.to_vec()).map_err(from_js)?;
                 }
             }
         }
-        if let Some(buffers) = &self.buffers {
+        if let Some(buffers) = buffers {
             buffers.finish_upload(layer).map_err(from_js)?;
         }
         Ok(())

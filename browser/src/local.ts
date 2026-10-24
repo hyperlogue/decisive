@@ -1,5 +1,5 @@
 import { InferenceError } from './types.js';
-import type { Backend, BatchResult, CacheOptions, Controls, Family, InferenceResult, LoadOptions, Model, ModelInfo, OpaqueCache, PredictOptions, Predictor, Progress, Registry, Request, Selection } from './types.js';
+import type { Backend, BatchResult, CacheOptions, Controls, Family, InferenceResult, LoadOptions, Model, ModelInfo, OpaqueCache, PredictOptions, Predictor, Progress, Registry, Request, Selection, SyncReader } from './types.js';
 
 interface WasmControl { cancel(): void; free(): void }
 interface WasmCache { clear(): void; dispose(): void; free(): void }
@@ -13,7 +13,7 @@ interface WasmModel {
 export interface WasmModule {
   default(options?: { module_or_path: BufferSource }): Promise<unknown>;
   InferenceControl: new (progress?: (json: string) => void) => WasmControl;
-  DecisiveModel: { load(configuration: string, files: Record<string, Blob | Uint8Array>, control: WasmControl): Promise<WasmModel> };
+  DecisiveModel: { load(configuration: string, files: Record<string, Blob | Uint8Array | SyncReader>, control: WasmControl): Promise<WasmModel> };
 }
 
 class Cache implements OpaqueCache {
