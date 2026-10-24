@@ -77,7 +77,7 @@
     </main>
   </div>
     <dialog id="models-dialog" class="modal models-modal" aria-labelledby="models-title">
-        <div class="modal-heading"><h2 id="models-title" data-i18n="models">Models & storage</h2><button type="button" id="close-models" class="icon-button" data-title="close" aria-label="Close" autofocus><span data-icon="close"></span></button></div><div class="models-body"><label class="model-label" for="storage-model" data-i18n="model">Model</label><select id="storage-model" class="model-select"></select>
+        <div class="modal-heading"><h2 id="models-title" data-i18n="models">Models & storage</h2><button type="button" id="close-models" class="icon-button" data-title="close" aria-label="Close" autofocus><span data-icon="close"></span></button></div><div class="models-body"><div id="models-list" class="model-options compact" role="radiogroup" aria-labelledby="models-title"></div>
         <div class="model-heading"><span data-icon="chip"></span><div><h3 id="model-name">Decima Small</h3><a id="model-source" href="https://huggingface.co/amyrmahdy/decima-small" target="_blank" rel="noopener noreferrer" data-i18n="modelSource">Model source ↗</a></div><span class="model-badge" id="model-badge"></span></div>
         <dl class="storage-stats"><div><dt data-i18n="downloadSize">Full download</dt><dd id="model-total">—</dd></div><div><dt data-i18n="storedSize">Stored on device</dt><dd id="model-stored">—</dd></div><div><dt data-i18n="remainingSize">Still to download</dt><dd id="model-remaining">—</dd></div><div><dt data-i18n="verifiedSize">Verified</dt><dd id="model-verified">—</dd></div></dl>
         <progress id="download-progress" value="0" max="1" aria-label="Download progress" data-aria="downloadProgress"></progress>
@@ -90,15 +90,27 @@
         <p class="revision-note">Revision <code id="model-revision"></code></p>
       </div>
   </dialog>
+  <dialog id="intro-dialog" class="modal intro-modal" aria-labelledby="intro-title">
+    <div class="modal-heading"><h2 id="intro-title" data-i18n="introTitle">How this demo works</h2><button type="button" class="icon-button" id="close-intro" data-title="close" aria-label="Close"><span data-icon="close"></span></button></div>
+    <p class="modal-description" data-i18n="introGoal"></p>
+    <ol class="intro-steps">
+      <li><span data-icon="chip"></span><div><strong data-i18n="introStep1Title"></strong><p data-i18n="introStep1"></p></div></li>
+      <li><span data-icon="spark"></span><div><strong data-i18n="introStep2Title"></strong><p data-i18n="introStep2"></p></div></li>
+      <li><span data-icon="shield"></span><div><strong data-i18n="introStep3Title"></strong><p data-i18n="introStep3"></p></div></li>
+    </ol>
+    <p class="setup-note" data-i18n="introExpect"></p>
+    <div class="modal-actions"><button type="button" id="intro-continue" class="primary-button" autofocus><span data-i18n="getStarted">Get started</span><span data-icon="arrow"></span></button></div>
+  </dialog>
   <dialog id="setup-dialog" class="modal setup-modal" aria-labelledby="setup-title">
-    <div class="modal-heading"><h2 id="setup-title" data-i18n="setupTitle">Set up analysis</h2><button type="button" class="icon-button" id="close-setup" data-title="close" aria-label="Close"><span data-icon="close"></span></button></div>
+    <div class="modal-heading"><h2 id="setup-title" data-i18n="chooseModel">Choose model</h2><button type="button" class="icon-button" id="close-setup" data-title="close" aria-label="Close"><span data-icon="close"></span></button></div>
     <p class="modal-description" data-i18n="onDevice">Your messages stay in this browser.</p>
-    <label class="model-label" for="setup-model" data-i18n="model">Model</label><select id="setup-model" class="model-select"></select><div class="setup-model"><span data-icon="chip"></span><div><strong id="setup-model-name">Decima Small</strong><p id="setup-size"></p></div></div>
+    <div id="setup-models" class="model-options" role="radiogroup" aria-labelledby="setup-title"></div>
+    <p class="progress-message" id="setup-status" role="status"></p>
     <div class="webgpu-status"><span>WebGPU</span><span id="cap-gpu" role="status">Checking…</span></div>
     <p class="explanation" data-i18n="webgpuRequired">This page requires WebGPU to work.</p>
     <p class="setup-note" data-i18n="downloadNote"></p>
     <p id="setup-error" class="notice error" role="alert" hidden></p>
-    <div class="modal-actions"><button type="button" id="skip-setup" class="secondary-button" data-i18n="lookAround">Not now</button><button type="button" id="start-analysis" class="primary-button" autofocus data-i18n="downloadModel">Download model</button></div>
+    <div class="modal-actions"><button type="button" id="setup-download" class="secondary-button"><span id="setup-download-label"></span></button><button type="button" id="setup-pause" class="secondary-button" data-i18n="pause" hidden>Pause</button><button type="button" id="start-analysis" class="primary-button" autofocus data-i18n="useModel">Use model</button></div>
     <button id="manage-models" class="text-button" data-i18n="models">Models & storage</button>
   </dialog>
   <dialog id="share-dialog" class="modal share-modal" aria-labelledby="share-title">

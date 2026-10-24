@@ -36,12 +36,14 @@ try{
     return r.fulfill({body,headers:{'access-control-allow-origin':'*'}});
   });
   const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(base);await page.waitForSelector('#setup-dialog[open]');
+  await page.goto(base);await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
   await page.evaluate(async()=>{
     const dir=await(await navigator.storage.getDirectory()).getDirectoryHandle('decisive-privacy-decima-small-v1',{create:true});
     const writer=await(await dir.getFileHandle('preserved.txt',{create:true})).createWritable();await writer.write('keep Decima');await writer.close();
   });
-  await page.selectOption('#setup-model','pplx-flash-q4');
+  await page.click('#setup-models [data-model="pplx-flash-q4"] .model-pick');
+  assert.equal(await page.locator('#start-analysis').isDisabled(),true);
+  await page.click('#setup-download');
   await page.waitForFunction(()=>!document.getElementById('start-analysis').disabled);
   await page.click('#start-analysis');
   await page.waitForFunction(()=>document.getElementById('composer-status').textContent==='Updates as you type');
@@ -50,9 +52,9 @@ try{
   assert.equal(raw.input.state.context[1].content,recorded.draft);assert.equal(Object.hasOwn(raw.input,'long'),false);
   assert.equal(raw.elapsed_ms,123);assert.equal(await page.locator('#runtime-model').innerText(),fixture.name);
   assert.equal(requests.length,2);
-  await page.reload();await page.waitForSelector('#setup-dialog[open]');
-  await page.selectOption('#setup-model','pplx-flash-q4');
-  await page.waitForFunction(()=>document.getElementById('start-analysis').textContent==='Use model');
+  await page.reload();await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
+  await page.click('#setup-models [data-model="pplx-flash-q4"] .model-pick');
+  await page.waitForFunction(()=>!document.getElementById('start-analysis').disabled);
   await page.click('#start-analysis');
   await page.waitForFunction(()=>document.getElementById('composer-status').textContent==='Updates as you type');
   await page.fill('#message-input','too long fixture');

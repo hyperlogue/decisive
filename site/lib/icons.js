@@ -21,6 +21,7 @@ const paths = {
   arrow:'<path d="M4 12h16m-6-6 6 6-6 6"/>',
   close:'<path d="m6 6 12 12M6 18 18 6"/>',
   check:'<path d="m5 12 4 4L19 6"/>',
-  download:'<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>'
+  download:'<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
+  trash:'<path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'
 };
 export const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.spark}</svg>`;

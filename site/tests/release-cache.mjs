@@ -48,8 +48,8 @@ try{
   await writer.write('preserved');await writer.close();
  });
  await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
- await page.goto(base);await page.waitForSelector('#setup-dialog[open]');
- const shown={model:await page.locator('#setup-model-name').textContent(),size:await page.locator('#setup-size').textContent()};
+ await page.goto(base);await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
+ const shown={model:await page.locator('#setup-models .model-option.selected .model-option-name').textContent(),size:await page.locator('#setup-models [data-model="decima-small"] .model-option-size').textContent()};
  console.log(JSON.stringify(shown));
  assert.equal(shown.model,'Decima Small');assert.match(shown.size,/506.7 MB/);
  assert.equal(await page.evaluate(async()=>{
@@ -60,8 +60,8 @@ try{
  const mismatch=await browser.newContext({serviceWorkers:'block'});
  await mismatch.route('**/workers/model-worker.js',r=>r.fulfill({contentType:'text/javascript',body:oldWorker}));
  await mismatch.route('**/model.json',r=>r.fulfill({contentType:'application/json',body:oldModel}));
- const blocked=await mismatch.newPage();await blocked.goto(base);await blocked.waitForSelector('#setup-dialog[open]');
- assert.match(await blocked.locator('#setup-size').textContent(),/506.7 MB/);
+ const blocked=await mismatch.newPage();await blocked.goto(base);await blocked.waitForSelector('#intro-dialog[open]');await blocked.click('#intro-continue');await blocked.waitForSelector('#setup-dialog[open]');
+ assert.match(await blocked.locator('#setup-models [data-model="decima-small"] .model-option-size').textContent(),/506.7 MB/);
  assert.equal(await blocked.locator('#start-analysis').isDisabled(),true);
  assert.match(await blocked.locator('#setup-error').textContent(),/older version/);
  await mismatch.close();

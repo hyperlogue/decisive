@@ -11,13 +11,21 @@ try{
  const context=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:1});
  const page=await context.newPage(),errors=[],requests=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>requests.push(r.url()));
- await page.goto(base);await page.waitForSelector('#setup-dialog[open]');
+ await page.goto(base);await page.waitForSelector('#intro-dialog[open]');
+ assert.equal(await page.locator('#setup-dialog[open]').count(),0);
+ assert.equal(await page.locator('#intro-dialog .intro-steps li').count(),3);
+ await page.screenshot({path:path.join(screenshots,'intro-mobile.png')});
+ await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
  assert.equal(await page.locator('#cap-gpu').textContent(),'Available');
  assert.equal(await page.locator('#backend, #browser-capabilities, .compatibility-details').count(),0);
  assert.match(await page.locator('#setup-dialog').textContent(),/This page requires WebGPU to work/);
- assert.match(await page.locator('#setup-size').textContent(),/506.7 MB/);
+ assert.match(await page.locator('#setup-models [data-model="decima-small"] .model-option-size').textContent(),/506.7 MB/);
+ assert.equal(await page.locator('#setup-models .model-option').count(),2);
+ assert.equal(await page.locator('#setup-dialog select, #skip-setup').count(),0);
+ assert.equal(await page.locator('#start-analysis').isDisabled(),true);
+ assert.equal(await page.locator('#setup-download').isVisible(),true);
  await page.screenshot({path:path.join(screenshots,'setup-mobile.png')});
- await page.click('#skip-setup');await page.fill('#message-input','Private test text: alex@example.com');
+ await page.click('#close-setup');await page.fill('#message-input','Private test text: alex@example.com');
  assert.equal(await page.locator('#enable-analysis').count(),0);
  assert.match(await page.locator('#page-description').innerText(),/Decisive.*WebGPU/);
  assert.equal(await page.evaluate(()=>{
@@ -38,7 +46,7 @@ try{
  assert.equal(await page.locator('#model-files li').count(),7);
  assert.equal(await page.locator('#delete-model').isDisabled(),true);
  await page.screenshot({path:path.join(screenshots,'models-mobile.png')});
- await page.selectOption('#storage-model','pplx-flash-q4');
+ await page.click('#models-list [data-model="pplx-flash-q4"] .model-pick');
  await page.waitForFunction(()=>document.querySelector('#model-name').textContent==='Pplx Flash · Q4');
  assert.equal(await page.locator('#model-badge').textContent(),'Not downloaded');
  assert.equal(await page.locator('#download-model').isVisible(),true);
@@ -55,7 +63,7 @@ try{
    worker.postMessage({id:1,method:'download',args:{modelId:'pplx-flash-q4'}});
  }));
  assert.equal(blockedQ4,'gpuPrecisionRequired');
- await page.selectOption('#storage-model','decima-small');
+ await page.click('#models-list [data-model="decima-small"] .model-pick');
  await page.waitForFunction(()=>document.querySelector('#model-name').textContent==='Decima Small');
 
  assert.equal(await page.evaluate(()=>location.hash),'');
@@ -67,7 +75,7 @@ try{
  assert.equal(await page.locator('#models-dialog').getAttribute('open'),null);
  assert.ok(requests.every(url=>new URL(url).origin===new URL(base).origin),'typing must not upload or fetch external data');
  await page.evaluate(()=>navigator.serviceWorker.ready);await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
- await context.setOffline(true);await page.reload();await page.waitForSelector('#setup-dialog[open]');await page.click('#manage-models');await page.waitForSelector('#model-files li');
+ await context.setOffline(true);await page.reload();await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');await page.click('#manage-models');await page.waitForSelector('#model-files li');
  assert.match(await page.locator('#model-total').textContent(),/506.7 MB/);
  await context.setOffline(false);
  assert.deepEqual(errors,[]);await context.close();
@@ -80,14 +88,20 @@ try{
  await c.route('**/models.json',r=>r.fulfill({json:{...catalog,models:[manifest,...catalog.models.filter(m=>m.id!==manifest.id)]}}));
  await c.route('https://huggingface.co/example/privacy-test/**',async r=>{await new Promise(resolve=>setTimeout(resolve,250));await r.fulfill({status:200,body:fixtures[r.request().url().split('/').at(-1)],headers:{'access-control-allow-origin':'*'}});});
  const p=await c.newPage();p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>console.log('CONSOLE',m.type(),m.text()));
- await p.goto(base);await p.waitForSelector('#setup-dialog[open]');await p.click('#manage-models');await p.click('#download-model');
+ await p.goto(base);await p.waitForSelector('#intro-dialog[open]');await p.click('#intro-continue');await p.waitForSelector('#setup-dialog[open]');await p.click('#manage-models');await p.click('#download-model');
  await p.waitForSelector('#pause-download:not([hidden])');await p.click('#close-models');
  assert.equal(await p.locator('#models-dialog').getAttribute('open'),null);
  await p.waitForFunction(()=>document.querySelector('#model-badge').textContent==='Ready',null,{timeout:30000}).catch(async e=>{console.log('DOWNLOAD STATE',await p.locator('#models-dialog').innerText());throw e;});
  await p.click('#open-setup');await p.click('#manage-models');
  assert.equal(await p.locator('.file-verified').count(),2);
  assert.equal(await p.locator('#delete-model').isEnabled(),true);
- await p.reload();await p.waitForSelector('#setup-dialog[open]');await p.click('#manage-models');await p.waitForSelector('#use-model:not([hidden])');
+ await p.reload();await p.waitForSelector('#intro-dialog[open]');await p.click('#intro-continue');await p.waitForSelector('#setup-dialog[open]');
+ await p.waitForFunction(()=>!document.getElementById('start-analysis').disabled);
+ assert.equal(await p.locator('#setup-download').isVisible(),false);
+ assert.equal(await p.locator('#setup-models [data-model="decima-small"] .model-delete').isVisible(),true);
+ assert.equal(await p.locator('#setup-models [data-model="pplx-flash-q4"] .model-delete').isVisible(),false);
+ await p.screenshot({path:path.join(screenshots,'setup-desktop.png')});
+ await p.click('#manage-models');await p.waitForSelector('#use-model:not([hidden])');
  await p.screenshot({path:path.join(screenshots,'models-desktop.png')});
  assert.equal(await p.locator('.file-verified').count(),2);
  await p.evaluate(async()=>{
@@ -99,7 +113,7 @@ try{
  await p.click('#delete-legacy');await p.click('#confirm-delete');
  await p.waitForSelector('#legacy-model[hidden]',{state:'attached'});
  assert.equal(await p.locator('.file-verified').count(),2);
- const other=await c.newPage();await other.goto(base);await other.waitForSelector('#setup-dialog[open]');
+ const other=await c.newPage();await other.goto(base);await other.waitForSelector('#intro-dialog[open]');await other.click('#intro-continue');await other.waitForSelector('#setup-dialog[open]');
  await other.evaluate(()=>{window.held=false;navigator.locks.request('decisive-privacy-model-files',{mode:'shared'},()=>new Promise(resolve=>{window.release=resolve;window.held=true;}));});
  await other.waitForFunction(()=>window.held);
  await p.click('#delete-model');await p.click('#confirm-delete');await p.waitForFunction(()=>!document.querySelector('#model-error').hidden);
@@ -107,6 +121,12 @@ try{
  await other.evaluate(()=>window.release());await other.close();
  await p.click('#delete-model');await p.click('#confirm-delete');await p.waitForFunction(()=>document.querySelector('#model-badge').textContent==='Not downloaded');
  assert.equal(await p.locator('#delete-model').isDisabled(),true);
+ await p.click('#close-models');await p.click('#open-setup');
+ assert.equal(await p.locator('#start-analysis').isDisabled(),true);
+ await p.click('#setup-download');await p.waitForFunction(()=>!document.getElementById('start-analysis').disabled,null,{timeout:30000});
+ await p.click('#setup-models [data-model="decima-small"] .model-delete');await p.click('#confirm-delete');
+ await p.waitForFunction(()=>document.getElementById('start-analysis').disabled&&!document.getElementById('setup-download').hidden);
+ assert.equal(await p.locator('#setup-dialog').getAttribute('open'),'');
  assert.deepEqual(errors,[]);await c.close();
  console.log('Real WASM hashing, browser OPFS persistence, cross-tab lock, scoped deletion: PASS');
 
@@ -125,7 +145,7 @@ try{
  const ui=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
  await ui.route('**/workers/model-worker.js',r=>r.fulfill({contentType:'text/javascript',body:recordedWorker}));
  const view=await ui.newPage();view.on('pageerror',e=>errors.push(e.message));
- await view.goto(base);await view.waitForSelector('#setup-dialog[open]');await view.click('#start-analysis');
+ await view.goto(base);await view.waitForSelector('#intro-dialog[open]');await view.click('#intro-continue');await view.waitForSelector('#setup-dialog[open]');await view.click('#start-analysis');
  await view.fill('#message-input',recorded.draft);await view.waitForSelector('#signal-name');
  assert.equal(await view.locator('.signal-card').count(),Object.values(recorded.output.response.answers).flatMap(a=>a.type==='noul'?[a.noul]:Object.entries(a.max_probabilities??a.probabilities).filter(([k])=>!['fake','none'].includes(k)).map(([,p])=>p)).filter(p=>p>=0.5).length);
  assert.equal(await view.locator('#runtime-tokens').innerText(),'74');
@@ -165,7 +185,7 @@ try{
  const unavailable=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
  await unavailable.route('**/lib/webgpu.js',r=>r.fulfill({contentType:'text/javascript',body:'export async function checkWebGPU(){return false;}'}));
  const blocked=await unavailable.newPage();blocked.on('pageerror',e=>errors.push(e.message));
- await blocked.goto(base);await blocked.waitForSelector('#setup-dialog[open]');
+ await blocked.goto(base);await blocked.waitForSelector('#intro-dialog[open]');await blocked.click('#intro-continue');await blocked.waitForSelector('#setup-dialog[open]');
  assert.equal(await blocked.locator('#cap-gpu').textContent(),'Not available');
  assert.equal(await blocked.locator('#start-analysis').isDisabled(),true);
  assert.match(await blocked.locator('#setup-error').textContent(),/WebGPU is not available/);

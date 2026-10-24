@@ -23,9 +23,9 @@ try{
       await route.fulfill({contentType:'text/javascript',body:platform+'\n'+original});
     });
     const page=await context.newPage();
-    await page.goto(base);await page.waitForSelector('#setup-dialog[open]');
+    await page.goto(base);await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
     const first=await page.locator('#cap-gpu').textContent();
-    await page.reload();await page.waitForSelector('#setup-dialog[open]');
+    await page.reload();await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
     const afterRefresh=await page.locator('#cap-gpu').textContent();
     observations.push({failure,first,afterRefresh});
     await context.close();

@@ -35,7 +35,7 @@ The complete `dist/` output works under any URL directory. The service worker ca
 
 ## Interface and storage
 
-- Setup shows WebGPU availability, a model picker, and the selected model's download size. Models & storage is a modal over the editor.
+- An intro explains the goal, the three steps, and what to expect, then opens Choose model. Both models appear as cards with size and download state; clicking a card selects it. The dialog downloads, pauses, and deletes model files directly, and Use model stays disabled until the selected model is fully downloaded. It also shows WebGPU availability. Models & storage is a modal over the editor.
 - The interface follows the system light or dark theme. Wide screens place the draft and analysis side by side; phones stack them. Entrances, result cards, score bars, dialogs, and the in-progress indicator animate briefly, and all motion is removed under reduced-motion preferences.
 - English, Spanish, Simplified Chinese, and Arabic interfaces, including RTL and local PNG export. Scores and raw input/output are available in expandable details.
 - The draft stays immediately below the header; analysis scrolls within the rest of the viewport. Result changes and disclosures animate, respecting reduced-motion preferences. Inference time and the runtime's reported input-token count appear above the results and clear when the draft changes; these numbers do not include model download or loading time.

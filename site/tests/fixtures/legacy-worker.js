@@ -1,5 +1,4 @@
 import {ModelStore, LOCK_NAME} from '../lib/model-store.js';
-import {loadFlash} from '../runtime/runtime.js';
 import {checkWebGPU} from '../lib/webgpu.js';
 
 let storePromise, apiPromise, engine = null, backend = null, busy = false, cancellation = null;
@@ -82,6 +81,7 @@ const methods = {
       notify({phase:'loading'});
       loadedApi = await api();
       const files = await (await store()).files();
+      const {loadFlash} = await import('../runtime/runtime.js');
       engine = await loadFlash(loadedApi, files, message=>{
         if (cancellation?.signal.aborted) throw new DOMException('Cancelled','AbortError');
         notify({phase:busy && backend ? 'analyzing' : 'loading', message});

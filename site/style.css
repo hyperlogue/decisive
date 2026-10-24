@@ -100,6 +100,8 @@ button, textarea, select { font: inherit; color: inherit; }
 button, summary, select { cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 button { border: 0; }
 button:disabled { cursor: not-allowed; opacity: .5; }
+.primary-button:disabled { opacity: 1; background: var(--surface-3); border-color: var(--line); color: var(--faint); box-shadow: none; }
+.model-pick:disabled { opacity: .55; }
 button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 a { color: inherit; }
 h1, h2, p { margin: 0; }
@@ -251,12 +253,31 @@ pre { margin: 0; color: var(--text-2); font: 11px/1.65 ui-monospace,SFMono-Regul
 .setup-note { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 16px 0 20px; }
 .modal-actions { display: flex; gap: 10px; }
 .modal-actions > button { flex: 1; }
-.model-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-2); margin: 20px 0 6px; }
-.model-select { width: 100%; min-height: 44px; padding: 8px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font-size: 14px; box-shadow: var(--shadow-sm); }
-.setup-model { display: flex; gap: 14px; align-items: center; padding: 14px; margin: 12px 0 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.setup-model > [data-icon], .model-heading > [data-icon] { width: 44px; height: 44px; flex: none; border-radius: 10px; background: var(--accent-wash); color: var(--accent); border: 1px solid var(--accent-line); }
-.setup-model svg, .model-heading svg { width: 22px; height: 22px; }
-.setup-model p { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.model-heading > [data-icon], .model-option-icon, .intro-steps [data-icon] { display: grid; place-items: center; width: 44px; height: 44px; flex: none; border-radius: 10px; background: var(--accent-wash); color: var(--accent); border: 1px solid var(--accent-line); }
+.model-heading svg, .model-option-icon svg, .intro-steps svg { width: 22px; height: 22px; }
+.model-options { display: grid; gap: 10px; margin-top: 16px; }
+.model-options.compact { margin-top: 20px; }
+.model-option { position: relative; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease; }
+.model-option.selected { border-color: var(--accent); background: var(--accent-wash); box-shadow: 0 0 0 1px var(--accent); }
+.model-pick { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px; padding-inline-end: 14px; text-align: start; background: transparent; color: inherit; border-radius: inherit; }
+.model-option:has(.model-delete:not([hidden])) .model-pick { padding-inline-end: 52px; }
+.model-option-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.model-option-name { font-size: 14px; font-weight: 600; }
+.model-option-size, .model-option-note { font-size: 12px; color: var(--muted); }
+.model-option-note.unavailable { color: var(--red); }
+.model-option .model-badge { margin-inline-start: 0; }
+.model-option.ready .model-badge { color: var(--ok); background: var(--ok-wash); border-color: var(--ok-line); }
+.model-option > progress { position: absolute; inset-inline: 14px; bottom: 6px; width: auto; height: 4px; }
+.model-delete { position: absolute; inset-inline-end: 8px; inset-block: 0; margin-block: auto; color: var(--muted); }
+.compact .model-option-icon { display: none; }
+.intro-steps { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 14px; }
+.intro-steps li { display: flex; gap: 14px; align-items: flex-start; }
+.intro-steps [data-icon] { width: 38px; height: 38px; }
+.intro-steps svg { width: 19px; height: 19px; }
+.intro-steps strong { font-size: 14px; font-weight: 600; }
+.intro-steps p { font-size: 13px; color: var(--muted); line-height: 1.55; margin-top: 2px; }
+.intro-modal .modal-description { font-size: 14px; line-height: 1.55; color: var(--text-2); }
+#setup-status:empty { display: none; }
 .webgpu-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; font-weight: 500; }
 .webgpu-status > span:last-child { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; color: var(--ok); background: var(--ok-wash); border: 1px solid var(--ok-line); }
 .webgpu-status > .unavailable { color: var(--red) !important; background: var(--red-wash) !important; border-color: var(--red-line) !important; }
@@ -404,6 +425,8 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 4px; }
   .primary-button:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
   .secondary-button:hover:not(:disabled) { background: var(--surface-3); }
   .text-button:hover { background: var(--accent-wash); }
+  .model-option:not(.selected):has(.model-pick:not(:disabled):hover) { border-color: var(--line-strong); background: var(--surface-2); }
+  .model-delete:hover { color: var(--red); }
   .analysis-details > summary:hover, .raw-analysis summary:hover, .file-details summary:hover { color: var(--text); }
   .privacy-pill:hover { filter: brightness(.98); }
 }

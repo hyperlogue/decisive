@@ -6,7 +6,7 @@ try{
   const page=await browser.newPage();const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   await page.goto(process.env.PRIVACY_TEST_URL||'http://127.0.0.1:8768/site/dist/');
-  await page.waitForSelector('#setup-dialog[open]');await page.click('#manage-models');
+  await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');await page.click('#manage-models');
   assert.equal(await page.locator('#storage-model').inputValue(),'decima-small');
   await page.click('#download-model');
   const start=Date.now();let previous=-1;
