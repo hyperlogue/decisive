@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pplx GEMM variants</title>
+<style>
+:root { color-scheme: light dark; --fg: #1d1d1f; --muted: #6e6e73; --bg: #fff; --line: #d2d2d7; --good: #1a7f37; --bad: #c62828; }
+@media (prefers-color-scheme: dark) { :root { --fg: #f5f5f7; --muted: #a1a1a6; --bg: #111; --line: #3a3a3c; --good: #4ac26b; --bad: #ff6b6b; } }
+body { margin: 0; padding: 16px; font: 14px/1.4 -apple-system, system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+h1 { font-size: 18px; margin: 0 0 4px; }
+#status { color: var(--muted); margin: 4px 0 12px; white-space: pre-wrap; }
+table { border-collapse: collapse; font: 12px ui-monospace, monospace; margin-bottom: 16px; }
+td, th { border-bottom: 1px solid var(--line); padding: 2px 8px; text-align: right; }
+td:first-child, th:first-child { text-align: left; }
+.best { color: var(--good); font-weight: 600; } .bad { color: var(--bad); }
+.wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Pplx GEMM variants</h1>
+<div id="status">Starting…</div>
+<div id="tables" class="wrap"></div>
+<script type="module">
+// Benchmarks exact Q4/Q8 grouped GEMM and fused MLP variants against the production kernels at
+// the demo's shapes, checks each output bit for bit against production, and posts the results
+// to the serving script after every shape so a phone that sleeps or crashes keeps partial data.
+const query = new URLSearchParams(location.search);
+const M = Number(query.get('m') || 300);
+const ROUNDS = Number(query.get('rounds') || 5);
+const TARGET_MS = Number(query.get('target') || 100);
+const BITS = (query.get('bits') || '4,8').split(',').map(Number);
+const ONLY = query.get('only');
+const RUN = [...crypto.getRandomValues(new Uint8Array(6))].map(b => b.toString(16).padStart(2, '0')).join('');
+const status = document.getElementById('status');
+const log = text => { status.textContent = text; };
+const report = { experiment: 'pplx-gemm-variants-v1', run: RUN, started: new Date().toISOString(), user_agent: navigator.userAgent,
+  params: { m: M, rounds: ROUNDS, target_ms: TARGET_MS }, results: [], errors: [] };
+async function post(final = false) {
+  report.final = final; report.updated = new Date().toISOString();
+  try { await fetch('report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(report) }); }
+  catch (e) { console.warn('report failed', e); }
+}
+
+// Per-analysis call counts at the demo's sequence length: 24 linear-attention and 8 full-attention layers.
+const SHAPES = [
+  { name: 'qkv/q 8192x2560', n: 8192, k: 2560, count: 32 },
+  { name: 'z 4096x2560', n: 4096, k: 2560, count: 24 },
+  { name: 'down 2560x9216', n: 2560, k: 9216, count: 32 },
+  { name: 'out/o 2560x4096', n: 2560, k: 4096, count: 32 },
+  { name: 'k,v 1024x2560', n: 1024, k: 2560, count: 16 },
+  { name: 'mlp gate/up 9216x2560', n: 9216, k: 2560, count: 32, mlp: true },
+];
+
+const HEADER = (mlp, out) => `enable f16;
+struct Params { a:vec4<u32>, b:vec4<u32>, c:vec4<u32>, d:vec4<u32> }
+@group(0) @binding(0) var<storage,read> x:array<u32>;
+@group(0) @binding(1) var<storage,read> w:array<u32>;
+${mlp ? '@group(0) @binding(2) var<storage,read> u:array<u32>;\n' : ''}@group(0) @binding(3) var<storage,read_write> y:array<${out}>;
+@group(0) @binding(4) var<uniform> p:Params;
+fn unpack_a(v:u32)->vec4<f16>{
+ let lo=bitcast<vec2<f16>>(((v&0x00ff00ffu)^0x00800080u)|0x64006400u)-vec2<f16>(1152.0h);
+ let hi=bitcast<vec2<f16>>((((v>>8u)&0x00ff00ffu)^0x00800080u)|0x64006400u)-vec2<f16>(1152.0h);
+ return vec4<f16>(lo.x,hi.x,lo.y,hi.y);
+}
+fn nib2(word:u32,s:u32)->vec2<f16>{return bitcast<vec2<f16>>(((word>>s)&0x000f000fu)|0x64006400u)-vec2<f16>(1032.0h);}
+fn nib4(word:u32)->vec4<f32>{return vec4<f32>((vec4<u32>(word)>>vec4<u32>(0u,4u,8u,12u))&vec4<u32>(15u))-vec4<f32>(8.0);}
+`;
+
+// Generated variants keep production's arithmetic: each group's integer dot is exact in f32, and
+// groups accumulate in order through fma(dot, sa*sb, total), so every variant must match bit for bit.
+//   a: 'f16' decoded activation tile | 'packed' int8 words decoded in the inner loop
+//   b: 'f16' decoded weight tile | 'packed' raw weight words in shared memory | 'global' read from storage
+//   prefetch: load the next group's words into registers while computing the current one
+function generate(v, bits) {
+  const { wgx, wgy, tm, tn, kstep = 16, a = 'f16', b = 'f16', prefetch = false, mlp = false } = v;
+  const BM = wgy * tm, BN = wgx * tn, T = wgx * wgy, V = tn / 4, GW = bits === 8 ? 17 : 9, WW = GW - 1;
+  const R = [...Array(tm).keys()], C = [...Array(tn).keys()], H = [...Array(V).keys()];
+  const mats = mlp ? [['w', 'bt', 'bw', 'sb', 'd', 't'], ['u', 'ut', 'uw', 'su', 'e', 'v']] : [['w', 'bt', 'bw', 'sb', 'd', 't']];
+  if (tn % 4 || (wgx & (wgx - 1)) || (wgy & (wgy - 1))) throw Error('unsupported tile');
+  if (mlp && (BN !== 64 || tn !== 4)) throw Error('fused MLP needs one 64-column output group per workgroup');
+  if (b === 'global' && prefetch) throw Error('prefetch needs shared weights');
+  const aWords = BM * 16, bWords = BN * WW;
+  if (prefetch && (aWords % T || bWords % T)) throw Error('prefetch needs whole tiles per thread');
+  let s = HEADER(mlp, mlp ? 'u32' : 'f32');
+  s += a === 'f16' ? `var<workgroup> at:array<vec4<f16>,${BM * 16}>;` : `var<workgroup> aw:array<u32,${BM * 16}>;`;
+  for (const [, bt, bw, sb] of mats) {
+    if (b === 'f16') s += `var<workgroup> ${bt}:array<vec4<f16>,${BN * 16}>;`;
+    if (b === 'packed') s += `var<workgroup> ${bw}:array<u32,${BN * WW}>;`;
+    s += `var<workgroup> ${sb}:array<f32,${BN}>;`;
+  }
+  s += `var<workgroup> sa:array<f32,${BM}>;\n`;
+  if (mlp) s += `var<workgroup> rmax:array<atomic<u32>,${BM}>;var<workgroup> codes:array<atomic<u32>,${BM * 16}>;
+fn even(v:f32)->i32 {let lo=floor(v);let f=v-lo;return i32(lo)+select(0,1,f>0.5||(f==0.5&&(i32(lo)&1)==1));}
+fn sigmoid(v:f32)->f32 { return 1.0/(1.0+exp(-v)); }
+fn silu(v:f32)->f32 { return v*sigmoid(v); }
+`;
+  s += `@compute @workgroup_size(${wgx},${wgy})
+fn main(@builtin(workgroup_id) g:vec3<u32>,@builtin(local_invocation_id) local:vec3<u32>){
+ let l=local&vec3<u32>(${wgx - 1}u,${wgy - 1}u,0u);
+ let m=p.a.x;let n=p.a.y;let groups=p.a.z/64u;let lane=l.y*${wgx}u+l.x;
+ let row=g.y*${BM}u+l.y*${tm}u;let col=g.x*${BN}u+l.x;
+`;
+  if (mlp) s += ` if(lane<${BM}u){atomicStore(&rmax[lane],0u);}for(var i=lane;i<${BM * 16}u;i+=${T}u){atomicStore(&codes[i],0u);}\n`;
+  for (const [, , , , , t] of mats) for (const r of R) for (const h of H) s += `var ${t}${r}_${h}=vec4<f32>(0.0);`;
+  s += '\n';
+  // Word fetch and shared store, either fused (no prefetch) or split around the compute loop.
+  const aIndex = i => `((g.y*${BM}u+(${i})/16u)*groups+grp)*17u+(${i})%16u`;
+  const bIndex = (i, src) => `((g.x*${BN}u+(${i})/${WW}u)*groups+grp)*${GW}u+(${i})%${WW}u`;
+  const aStore = (i, word) => a === 'f16' ? `at[${i}]=unpack_a(${word});` : `aw[${i}]=${word};`;
+  const bStore = (i, word, bt, bw) => {
+    if (b === 'packed') return `${bw}[((${i})%${WW}u)*${BN}u+(${i})/${WW}u]=${word};`;
+    if (bits === 8) return `${bt}[((${i})%16u)*${BN}u+(${i})/16u]=unpack_a(${word});`;
+    return `{let wd=${word};let p0=nib2(wd,0u);let p1=nib2(wd,4u);let p2=nib2(wd,8u);let p3=nib2(wd,12u);let c=(${i})%8u;let r=(${i})/8u;` +
+      `${bt}[c*2u*${BN}u+r]=vec4<f16>(p0.x,p1.x,p2.x,p3.x);${bt}[(c*2u+1u)*${BN}u+r]=vec4<f16>(p0.y,p1.y,p2.y,p3.y);}`;
+  };
+  const scaleLoads = grp => {
+    const loop = (count, body) => count <= T ? ` if(lane<${count}u){let i=lane;${body}}\n` : ` for(var i=lane;i<${count}u;i+=${T}u){${body}}\n`;
+    let t = loop(BM, `sa[i]=0.0;if(g.y*${BM}u+i<m){sa[i]=bitcast<f32>(x[((g.y*${BM}u+i)*groups+${grp})*17u+16u]);}`);
+    for (const [src, , , sb] of mats) t += loop(BN, `${sb}[i]=0.0;if(g.x*${BN}u+i<n){${sb}[i]=bitcast<f32>(${src}[((g.x*${BN}u+i)*groups+${grp})*${GW}u+${WW}u]);}`);
+    return t;
+  };
+  // Without prefetch, tiles load as production does: zero the slot, then decode only in-range rows.
+  const fused = () => {
+    let t = a === 'f16'
+      ? ` for(var i=lane;i<${aWords}u;i+=${T}u){let r=i/16u;let c=i%16u;at[i]=vec4<f16>(0.0h);\n  if(g.y*${BM}u+r<m){at[i]=unpack_a(x[((g.y*${BM}u+r)*groups+group)*17u+c]);}\n }\n`
+      : ` for(var i=lane;i<${aWords}u;i+=${T}u){let r=i/16u;let c=i%16u;aw[i]=0u;\n  if(g.y*${BM}u+r<m){aw[i]=x[((g.y*${BM}u+r)*groups+group)*17u+c];}\n }\n`;
+    if (b !== 'global') for (const [src, bt, bw] of mats) {
+      if (b === 'packed') t += ` for(var i=lane;i<${bWords}u;i+=${T}u){let r=i/${WW}u;let c=i%${WW}u;${bw}[c*${BN}u+r]=${bits === 4 ? '0x88888888u' : '0u'};\n  if(g.x*${BN}u+r<n){${bw}[c*${BN}u+r]=${src}[((g.x*${BN}u+r)*groups+group)*${GW}u+c];}\n }\n`;
+      else if (bits === 8) t += ` for(var i=lane;i<${bWords}u;i+=${T}u){let r=i/16u;let c=i%16u;${bt}[c*${BN}u+r]=vec4<f16>(0.0h);\n  if(g.x*${BN}u+r<n){${bt}[c*${BN}u+r]=unpack_a(${src}[((g.x*${BN}u+r)*groups+group)*17u+c]);}\n }\n`;
+      else t += ` for(var i=lane;i<${bWords}u;i+=${T}u){let r=i/8u;let c=i%8u;
+  ${bt}[c*2u*${BN}u+r]=vec4<f16>(0.0h);${bt}[(c*2u+1u)*${BN}u+r]=vec4<f16>(0.0h);
+  if(g.x*${BN}u+r<n){
+   let word=${src}[((g.x*${BN}u+r)*groups+group)*9u+c];
+   let p0=nib2(word,0u);let p1=nib2(word,4u);let p2=nib2(word,8u);let p3=nib2(word,12u);
+   ${bt}[c*2u*${BN}u+r]=vec4<f16>(p0.x,p1.x,p2.x,p3.x);
+   ${bt}[(c*2u+1u)*${BN}u+r]=vec4<f16>(p0.y,p1.y,p2.y,p3.y);
+  }
+ }
+`;
+    }
+    return t + scaleLoads('group');
+  };
+  const qa = aWords / T, qb = bWords / T;
+  if (prefetch) {
+    for (let q = 0; q < qa; q++) s += `var ra${q}=0u;`;
+    for (const [src] of mats) for (let q = 0; q < qb; q++) s += `var r${src}${q}=0u;`;
+    s += '\n';
+  }
+  const fetch = grp => {
+    let t = ` {let grp=${grp};\n`;
+    for (let q = 0; q < qa; q++) t += ` {let i=lane+${q * T}u;ra${q}=0u;if(g.y*${BM}u+i/16u<m){ra${q}=x[${aIndex('i')}];}}\n`;
+    for (const [src] of mats) for (let q = 0; q < qb; q++)
+      t += ` {let i=lane+${q * T}u;r${src}${q}=${bits === 4 ? '0x88888888u' : '0u'};if(g.x*${BN}u+i/${WW}u<n){r${src}${q}=${src}[${bIndex('i', src)}];}}\n`;
+    return t + ' }\n';
+  };
+  const store = () => {
+    let t = '';
+    for (let q = 0; q < qa; q++) t += ` {let i=lane+${q * T}u;${aStore('i', `ra${q}`)}}\n`;
+    for (const [src, bt, bw] of mats) for (let q = 0; q < qb; q++) t += ` {let i=lane+${q * T}u;${bStore('i', `r${src}${q}`, bt, bw)}}\n`;
+    return t;
+  };
+  if (prefetch) s += fetch('0u');
+  s += 'for(var group=0u;group<groups;group++){\n';
+  s += prefetch ? store() + scaleLoads('group') : fused();
+  s += ' workgroupBarrier();\n';
+  if (prefetch) s += ' if(group+1u<groups)' + fetch('group+1u');
+  for (const [, , , , d] of mats) for (const r of R) for (const h of H) s += `var ${d}${r}_${h}=vec4<f32>(0.0);`;
+  s += `\nfor(var base=0u;base<16u;base+=${kstep}u){\n`;
+  for (let uj = 0; uj < kstep; uj++) {
+    s += `{let j=base+${uj}u;\n`;
+    for (const [src, bt, bw, , d] of mats) {
+      const B = c => {
+        const colx = `l.x+${wgx * c}u`;
+        if (b === 'f16') return `vec4<f32>(${bt}[j*${BN}u+${colx}])`;
+        if (b === 'packed') return bits === 8 ? `vec4<f32>(unpack_a(${bw}[j*${BN}u+${colx}]))`
+          : `nib4(${bw}[(j/2u)*${BN}u+${colx}]>>((j&1u)*16u))`;
+        const o = `((g.x*${BN}u+${colx})*groups+group)*${GW}u`;
+        return bits === 8 ? `vec4<f32>(unpack_a(${src}[${o}+j]))` : `nib4(${src}[${o}+j/2u]>>((j&1u)*16u))`;
+      };
+      for (const c of C) s += `let ${d}b${c}=${B(c)};`;
+      s += '\n';
+      for (const h of H) for (const e of 'xyzw') s += `let ${d}b${h}${e}=vec4<f32>(${[0, 1, 2, 3].map(q => `${d}b${4 * h + q}.${e}`).join(',')});`;
+      s += '\n';
+    }
+    for (const r of R) {
+      s += a === 'f16' ? `let a${r}=vec4<f32>(at[(l.y*${tm}u+${r}u)*16u+j]);` : `let a${r}=vec4<f32>(unpack_a(aw[(l.y*${tm}u+${r}u)*16u+j]));`;
+      for (const [, , , , d] of mats) for (const h of H)
+        s += `${d}${r}_${h}=fma(vec4<f32>(a${r}.w),${d}b${h}w,fma(vec4<f32>(a${r}.z),${d}b${h}z,fma(vec4<f32>(a${r}.y),${d}b${h}y,fma(vec4<f32>(a${r}.x),${d}b${h}x,${d}${r}_${h}))));`;
+      s += '\n';
+    }
+    s += '}\n';
+  }
+  s += '}\n';
+  for (const [, , , sb, d, t] of mats) {
+    for (const h of H) s += `let ${d}sc${h}=vec4<f32>(${[0, 1, 2, 3].map(q => `${sb}[l.x+${wgx * (4 * h + q)}u]`).join(',')});\n`;
+    for (const r of R) for (const h of H) s += `${t}${r}_${h}=fma(${d}${r}_${h},sa[l.y*${tm}u+${r}u]*${d}sc${h},${t}${r}_${h});\n`;
+  }
+  s += 'workgroupBarrier();}\n';
+  if (!mlp) {
+    for (const r of R) for (const c of C) s += `if(row+${r}u<m&&col+${wgx * c}u<n){y[(row+${r}u)*n+col+${wgx * c}u]=t${r}_${c >> 2}[${c & 3}];}\n`;
+    return { code: s + '}', bm: BM, bn: BN };
+  }
+  // Fused SiLU product and int8 group quantization, as in grouped_q4_mlp.wgsl.
+  for (const r of R) {
+    s += `var q${r}=vec4<f32>(0.0);if(row+${r}u<m){q${r}=vec4<f32>(silu(t${r}_0[0])*v${r}_0[0],silu(t${r}_0[1])*v${r}_0[1],silu(t${r}_0[2])*v${r}_0[2],silu(t${r}_0[3])*v${r}_0[3]);}\n`;
+    s += `let x${r}=abs(q${r});atomicMax(&rmax[l.y*${tm}u+${r}u],bitcast<u32>(max(max(x${r}.x,x${r}.y),max(x${r}.z,x${r}.w))));\n`;
+  }
+  s += 'workgroupBarrier();\n';
+  for (const r of R) s += `{let scale=max(bitcast<f32>(atomicLoad(&rmax[l.y*${tm}u+${r}u]))/127.0,1.1754943508222875e-38);let inverse=1.0/scale;
+for(var c=0u;c<4u;c++){let q=clamp(even(q${r}[c]*inverse),-127,127);let gc=l.x+16u*c;atomicOr(&codes[(l.y*${tm}u+${r}u)*16u+gc/4u],(u32(q)&255u)<<(8u*(gc%4u)));}
+if(l.x==0u&&row+${r}u<m){y[((row+${r}u)*(n/64u)+g.x)*17u+16u]=bitcast<u32>(scale);}}\n`;
+  s += `workgroupBarrier();
+for(var i=lane;i<${BM * 16}u;i+=${T}u){let r=i/16u;if(g.y*${BM}u+r<m){y[((g.y*${BM}u+r)*(n/64u)+g.x)*17u+i%16u]=atomicLoad(&codes[i]);}}
+}`;
+  return { code: s, bm: BM, bn: BN };
+}
+
+// Port of grouped_q4::q8_weights: rewrites a production Q4 kernel's weight tile load for Q8 rows.
+function q8Weights(source) {
+  const header = 'let r=i/8u;let c=i%8u;', at = source.indexOf(header);
+  const start = source.lastIndexOf('\n', at) + 1, end = at + source.slice(at).indexOf('\n }\n') + 4;
+  const bounds = source.slice(start, at);
+  const number = prefix => { const from = bounds.indexOf(prefix) + prefix.length; return parseInt(bounds.slice(from, from + bounds.slice(from).indexOf('u'))); };
+  const n = number('lane;i<') / 8, threads = number('i+='), up = source.slice(start, end).includes('ut[');
+  const zero = up ? `bt[c*${n}u+r]=vec4<f16>(0.0h);ut[c*${n}u+r]=vec4<f16>(0.0h);` : `bt[c*${n}u+r]=vec4<f16>(0.0h);`;
+  const load = up ? `bt[c*${n}u+r]=unpack_a(w[o]);ut[c*${n}u+r]=unpack_a(u[o]);` : `bt[c*${n}u+r]=unpack_a(w[o]);`;
+  const tile = ` for(var i=lane;i<${n * 16}u;i+=${threads}u){let r=i/16u;let c=i%16u;${zero}\n  if(g.x*${n}u+r<n){let o=((g.x*${n}u+r)*groups+group)*17u+c;${load}}\n }\n`;
+  return (source.slice(0, start) + tile + source.slice(end)).replaceAll('*9u+8u', '*17u+16u');
+}
+
+const PRODUCTION = [
+  { name: 'prod tuned 64x64', file: 'grouped_q4_tuned.wgsl', bm: 64, bn: 64, reference: true },
+  { name: 'prod unrolled 32x64', file: 'grouped_q4_unrolled_32x64.wgsl', bm: 32, bn: 64 },
+  { name: 'prod unrolled 64x64', file: 'grouped_q4_unrolled_64x64.wgsl', bm: 64, bn: 64 },
+  { name: 'prod r4x8 64x64', file: 'grouped_q4_r4x8.wgsl', bm: 64, bn: 64 },
+];
+const PRODUCTION_MLP = { name: 'prod mlp 64x64', file: 'grouped_q4_mlp.wgsl', bm: 64, bn: 64, reference: true };
+const t32 = { wgx: 16, wgy: 8, tm: 4, tn: 4 }, t64 = { wgx: 16, wgy: 16, tm: 4, tn: 4 };
+const GENERATED = [
+  ['gen 32x64', t32], ['gen 64x64', t64],
+  ['32x64 B packed', { ...t32, b: 'packed' }], ['64x64 B packed', { ...t64, b: 'packed' }],
+  ['32x64 A packed', { ...t32, a: 'packed' }],
+  ['32x64 B global', { ...t32, b: 'global' }], ['64x64 B global', { ...t64, b: 'global' }],
+  ['32x64 k2', { ...t32, kstep: 2 }], ['32x64 k8', { ...t32, kstep: 8 }],
+  ['64x64 k2', { ...t64, kstep: 2 }], ['64x64 k4', { ...t64, kstep: 4 }], ['64x64 k8', { ...t64, kstep: 8 }],
+  ['32x64 prefetch', { ...t32, prefetch: true }], ['32x64 prefetch B packed', { ...t32, prefetch: true, b: 'packed' }],
+  ['64x64 prefetch', { ...t64, prefetch: true }], ['64x64 prefetch k2', { ...t64, prefetch: true, kstep: 2 }],
+  ['32x128 B packed', { wgx: 32, wgy: 8, tm: 4, tn: 4, b: 'packed' }],
+  ['64x32 B packed', { wgx: 8, wgy: 16, tm: 4, tn: 4, b: 'packed' }],
+  ['16x64 B packed', { wgx: 16, wgy: 4, tm: 4, tn: 4, b: 'packed' }],
+  ['32x64 tm2 256t', { wgx: 16, wgy: 16, tm: 2, tn: 4 }], ['32x64 tm2 256t B packed', { wgx: 16, wgy: 16, tm: 2, tn: 4, b: 'packed' }],
+  ['32x64 k8 B packed', { ...t32, kstep: 8, b: 'packed' }], ['32x64 k4', { ...t32, kstep: 4 }],
+  ['32x64 tn8 64t B packed', { wgx: 8, wgy: 8, tm: 4, tn: 8, b: 'packed' }],
+  ['64x64 tn8 128t B packed', { wgx: 8, wgy: 16, tm: 4, tn: 8, b: 'packed' }],
+].map(([name, v]) => ({ name, v }));
+const m32 = { wgx: 16, wgy: 8, tm: 4, tn: 4, mlp: true }, m64 = { wgx: 16, wgy: 16, tm: 4, tn: 4, mlp: true };
+const GENERATED_MLP = [
+  ['mlp gen 64x64 k2', { ...m64, kstep: 2 }], ['mlp 64x64 B packed k2', { ...m64, kstep: 2, b: 'packed' }],
+  ['mlp 64x64 B packed k4', { ...m64, kstep: 4, b: 'packed' }], ['mlp 64x64 k1', { ...m64, kstep: 1 }], ['mlp 64x64 k4', { ...m64, kstep: 4 }],
+  ['mlp 64x64 prefetch k2', { ...m64, kstep: 2, prefetch: true }],
+  ['mlp 64x64 B global k2', { ...m64, kstep: 2, b: 'global' }],
+  ['mlp 32x64 k2', { ...m32, kstep: 2 }], ['mlp 32x64 k4', { ...m32, kstep: 4 }], ['mlp 32x64 prefetch k2', { ...m32, kstep: 2, prefetch: true }], ['mlp 32x64 B packed k2', { ...m32, kstep: 2, b: 'packed' }],
+  ['mlp 32x64 B packed k16', { ...m32, kstep: 16, b: 'packed' }], ['mlp 32x64 prefetch B packed k2', { ...m32, kstep: 2, prefetch: true, b: 'packed' }],
+  ['mlp 32x64 B global k2', { ...m32, kstep: 2, b: 'global' }],
+].map(([name, v]) => ({ name, v }));
+
+function hash(seed) { let s = seed >>> 0 || 1; return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s; }; }
+const f32bits = v => new Uint32Array(new Float32Array([v]).buffer)[0];
+// Group-64 rows: Q8 activations or weights hold 16 code words and a scale; Q4 weights 8 nibble words.
+function rows(n, k, bits, seed) {
+  const gw = bits === 8 ? 17 : 9, out = new Uint32Array(n * (k / 64) * gw), r = hash(seed);
+  for (let i = 0; i < out.length; i++) {
+    if (i % gw === gw - 1) { out[i] = f32bits(0.001 + (r() % 1000) * 1e-5); continue; }
+    let v = 0;
+    if (bits === 8) for (let b = 0; b < 4; b++) v |= (((r() % 255) - 127) & 255) << (8 * b);
+    else for (let b = 0; b < 8; b++) v |= ((r() % 15) + 1) << (4 * b);
+    out[i] = v >>> 0;
+  }
+  return out;
+}
+
+async function main() {
+  try { await navigator.wakeLock?.request('screen'); } catch {}
+  const adapter = await navigator.gpu?.requestAdapter();
+  if (!adapter) throw Error('WebGPU unavailable');
+  if (!adapter.features.has('shader-f16')) throw Error('shader-f16 unavailable');
+  const device = await adapter.requestDevice({ requiredFeatures: ['shader-f16'], requiredLimits: {
+    maxComputeWorkgroupStorageSize: Math.min(32768, adapter.limits.maxComputeWorkgroupStorageSize),
+    maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, maxBufferSize: adapter.limits.maxBufferSize } });
+  const info = adapter.info || {};
+  report.adapter = { vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description,
+    storage: device.limits.maxComputeWorkgroupStorageSize, invocations: device.limits.maxComputeInvocationsPerWorkgroup };
+  device.lost.then(e => { report.errors.push({ lost: e.message }); post(true); });
+  const U = GPUBufferUsage;
+  const layout = device.createBindGroupLayout({ entries: [0, 1, 2, 3, 4].map(binding => ({ binding, visibility: GPUShaderStage.COMPUTE,
+    buffer: { type: binding === 4 ? 'uniform' : binding === 3 ? 'storage' : 'read-only-storage' } })) });
+  const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
+  const buffer = data => { const b = device.createBuffer({ size: Math.max(16, data.byteLength), usage: U.STORAGE | U.COPY_DST | U.COPY_SRC }); device.queue.writeBuffer(b, 0, data); return b; };
+  const empty = words => device.createBuffer({ size: Math.max(16, words * 4), usage: U.STORAGE | U.COPY_SRC | U.COPY_DST });
+  const dummy = empty(4);
+  async function compile(code, label) {
+    device.pushErrorScope('validation');
+    const module = device.createShaderModule({ code, label });
+    const messages = (await module.getCompilationInfo()).messages.filter(m => m.type === 'error');
+    if (messages.length) { await device.popErrorScope(); throw Error(`${messages[0].message} (line ${messages[0].lineNum})`); }
+    const pipeline = await device.createComputePipelineAsync({ layout: pipelineLayout, compute: { module, entryPoint: 'main' }, label });
+    const error = await device.popErrorScope();
+    if (error) throw Error(error.message);
+    return pipeline;
+  }
+  async function read(b, words) {
+    const r = device.createBuffer({ size: words * 4, usage: U.MAP_READ | U.COPY_DST });
+    const e = device.createCommandEncoder(); e.copyBufferToBuffer(b, 0, r, 0, words * 4); device.queue.submit([e.finish()]);
+    await r.mapAsync(GPUMapMode.READ); const out = new Uint32Array(r.getMappedRange().slice(0)); r.unmap(); r.destroy(); return out;
+  }
+  // One compute pass per dispatch, as in production selection; wall time per dispatch for a batch.
+  async function batch(c, reps) {
+    const e = device.createCommandEncoder();
+    for (let i = 0; i < reps; i++) { const pass = e.beginComputePass(); pass.setPipeline(c.pipeline); pass.setBindGroup(0, c.bind); pass.dispatchWorkgroups(...c.groups); pass.end(); }
+    const start = performance.now(); device.queue.submit([e.finish()]); await device.queue.onSubmittedWorkDone();
+    return (performance.now() - start) / reps;
+  }
+  const sources = {};
+  for (const p of [...PRODUCTION, PRODUCTION_MLP]) sources[p.file] = await (await fetch('kernels/' + p.file)).text();
+  const tables = document.getElementById('tables');
+  for (const bits of BITS) for (const shape of SHAPES) {
+    if (ONLY && !shape.name.includes(ONLY)) continue;
+    const label = `Q${bits} ${shape.name}`;
+    log(`${label}: compiling`);
+    const { n, k, mlp } = shape, gw = bits === 8 ? 17 : 9;
+    const x = buffer(rows(M, k, 8, 1)), w = buffer(rows(n, k, bits, 7)), u = mlp ? buffer(rows(n, k, bits, 11)) : dummy;
+    const outWords = mlp ? M * (n / 64) * 17 : M * n;
+    const params = device.createBuffer({ size: 64, usage: U.UNIFORM | U.COPY_DST });
+    device.queue.writeBuffer(params, 0, new Uint32Array([M, n, k, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+    const candidates = [];
+    const add = async (name, code, bm, bn, reference = false) => {
+      try {
+        const out = empty(outWords);
+        const bind = device.createBindGroup({ layout, entries: [x, w, u, out, params].map((b, i) => ({ binding: i, resource: { buffer: b } })) });
+        candidates.push({ name, pipeline: await compile(code, name), bind, out, groups: [Math.ceil(n / bn), Math.ceil(M / bm), 1], reference, times: [] });
+      } catch (e) { report.errors.push({ bits, shape: shape.name, variant: name, error: String(e.message || e) }); }
+    };
+    for (const p of mlp ? [PRODUCTION_MLP] : PRODUCTION) {
+      const source = bits === 8 ? q8Weights(sources[p.file]) : sources[p.file];
+      await add(p.name, source, p.bm, p.bn, p.reference);
+    }
+    for (const g of mlp ? GENERATED_MLP : GENERATED) {
+      try { const { code, bm, bn } = generate(g.v, bits); await add(g.name, code, bm, bn); }
+      catch (e) { report.errors.push({ bits, shape: shape.name, variant: g.name, error: String(e.message || e) }); }
+    }
+    const reference = candidates.find(c => c.reference);
+    if (!reference) { report.errors.push({ bits, shape: shape.name, error: 'reference failed' }); continue; }
+    for (const c of candidates) await batch(c, 1);
+    const expected = await read(reference.out, outWords);
+    for (const c of candidates) {
+      const actual = await read(c.out, outWords);
+      let diff = 0; for (let i = 0; i < outWords; i++) if (actual[i] !== expected[i]) diff++;
+      c.exact = diff === 0; c.mismatches = diff;
+    }
+    const perRun = await batch(reference, 2);
+    const reps = Math.max(2, Math.min(200, Math.ceil(TARGET_MS / Math.max(perRun, 0.05))));
+    for (let round = 0; round < ROUNDS; round++) {
+      log(`${label}: round ${round + 1}/${ROUNDS}, ${candidates.length} variants, ${reps} dispatches per batch`);
+      for (let j = 0; j < candidates.length; j++) {
+        const c = candidates[(j + round) % candidates.length];
+        c.times.push(await batch(c, reps));
+      }
+    }
+    const median = t => { const s = [...t].sort((a, b) => a - b); return s[s.length >> 1]; };
+    const base = median(reference.times);
+    const rowsOut = candidates.map(c => ({ variant: c.name, exact: c.exact, mismatches: c.mismatches, ms: median(c.times),
+      min_ms: Math.min(...c.times), speedup: base / median(c.times), times: c.times.map(t => +t.toFixed(4)) }));
+    report.results.push({ bits, shape: shape.name, m: M, n, k, count: shape.count, reps, rows: rowsOut });
+    render(tables, label, rowsOut);
+    for (const b of [x, w, u, params, ...candidates.map(c => c.out)]) if (b !== dummy) b.destroy();
+    await post();
+  }
+  summarize();
+  log(`Done. Run ${RUN} saved${report.errors.length ? `, ${report.errors.length} errors` : ''}.`);
+  await post(true);
+}
+
+function render(root, label, rows) {
+  const best = Math.min(...rows.filter(r => r.exact).map(r => r.ms));
+  const table = document.createElement('table');
+  table.innerHTML = `<caption style="text-align:left;font-weight:600">${label}</caption><tr><th>variant</th><th>ms</th><th>×prod</th><th>exact</th></tr>` +
+    rows.map(r => `<tr class="${r.exact ? (r.ms === best ? 'best' : '') : 'bad'}"><td>${r.variant}</td><td>${r.ms.toFixed(3)}</td><td>${r.speedup.toFixed(2)}</td><td>${r.exact ? 'yes' : r.mismatches}</td></tr>`).join('');
+  root.appendChild(table);
+}
+
+// Estimated GEMM milliseconds per analysis for each bit width: production selection versus the
+// fastest exact variant per shape.
+function summarize() {
+  report.summary = {};
+  for (const bits of BITS) {
+    const results = report.results.filter(r => r.bits === bits);
+    if (!results.length) continue;
+    let production = 0, best = 0;
+    const picks = {};
+    for (const r of results) {
+      const prod = Math.min(...r.rows.filter(x => x.variant.startsWith('prod') && x.exact).map(x => x.ms));
+      const fastest = r.rows.filter(x => x.exact).reduce((a, b) => (b.ms < a.ms ? b : a));
+      production += prod * r.count; best += fastest.ms * r.count;
+      picks[r.shape] = fastest.variant;
+    }
+    report.summary[`q${bits}`] = { production_ms: production, best_ms: best, speedup: production / best, picks };
+    const p = document.createElement('p');
+    p.textContent = `Q${bits}: production ${production.toFixed(1)} ms per analysis, best exact ${best.toFixed(1)} ms (${(production / best).toFixed(2)}×)`;
+    document.getElementById('tables').prepend(p);
+  }
+}
+
+main().catch(e => { report.errors.push({ fatal: String(e.message || e) }); log('Failed: ' + (e.message || e)); post(true); });
+</script>
+</body>
+</html>
