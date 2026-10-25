@@ -9,11 +9,18 @@ export const questions = {
     password:'password or PIN', token:'API key, access token, or session cookie', otp:'one-time verification code',
     privatekey:'private key or wallet recovery phrase', fake:'only a placeholder, example, or public value', none:'no secret value'}},
 };
+// Pplx reads every question in one sequence, so its wording is terse: 288 instead of 348 tokens
+// for a short draft, and on a 72-draft labeled check it answered all four questions correctly for
+// 65 drafts instead of 52 (Q8) or 56 (Q4), mainly by no longer reporting names as contact details.
 const pplxQuestions = {
-  ...questions,
-  secret:{...questions.secret, criteria:{
-    credential:'password, PIN, one-time verification code, API key, access token, or session cookie',
-    privatekey:questions.secret.criteria.privatekey, fake:questions.secret.criteria.fake, none:questions.secret.criteria.none}},
+  name:{type:'noul', instructions:'Real personal name?'},
+  personal:{type:'choice', instructions:'Personal detail?', criteria:{
+    birthday:'birth date', contact:'personal email or phone', precise:'home address or exact current location',
+    identity:'government ID', fake:'public or example only', none:'none'}},
+  financial:{type:'noul', instructions:'Bank, card, income, or debt details?'},
+  secret:{type:'choice', instructions:'Secret?', criteria:{
+    credential:'password, PIN, code, API key, token, or cookie', privatekey:'private key or seed phrase',
+    fake:'placeholder or example', none:'none'}},
 };
 const isPplx = engine => engine?.startsWith('pplx-');
 const questionsFor = engine => isPplx(engine) ? pplxQuestions : questions;

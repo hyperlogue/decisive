@@ -1,0 +1,72 @@
+{"draft":"Hi everyone! I'm Maria Gonzalez, a nurse from Texas.","name":true,"personal":"none","financial":false,"secret":"none"}
+{"draft":"Hello, my name is Daniel Okafor and I love hiking.","name":true,"personal":"none","financial":false,"secret":"none"}
+{"draft":"I'm Priya Raman, new here and excited to learn.","name":true,"personal":"none","financial":false,"secret":"none"}
+{"draft":"Call me Tom Becker. I've been coding for ten years.","name":true,"personal":"none","financial":false,"secret":"none"}
+{"draft":"Hey, Sofia Lindqvist here, I run a small bakery.","name":true,"personal":"none","financial":false,"secret":"none"}
+{"draft":"My full name is Kenji Watanabe and I study physics.","name":true,"personal":"none","financial":false,"secret":"none"}
+{"draft":"Hi! I was born on March 14, 1992, so I'm a Pisces.","name":false,"personal":"birthday","financial":false,"secret":"none"}
+{"draft":"My birthday is 07/22/1985 if anyone wants to celebrate.","name":false,"personal":"birthday","financial":false,"secret":"none"}
+{"draft":"Born 3 January 2001 in a small town, now a student.","name":false,"personal":"birthday","financial":false,"secret":"none"}
+{"draft":"Fun fact: my date of birth is 1979-11-30.","name":false,"personal":"birthday","financial":false,"secret":"none"}
+{"draft":"I turn 30 on 12 August 1995... wait, that math is right!","name":false,"personal":"birthday","financial":false,"secret":"none"}
+{"draft":"You can reach me at jenny.cho88@gmail.com anytime.","name":false,"personal":"contact","financial":false,"secret":"none"}
+{"draft":"Text me at (415) 555-0137 if you want to meet up.","name":false,"personal":"contact","financial":false,"secret":"none"}
+{"draft":"My personal phone is +44 7700 900123, WhatsApp works too.","name":false,"personal":"contact","financial":false,"secret":"none"}
+{"draft":"Email me directly: rk.patel.home@outlook.com","name":false,"personal":"contact","financial":false,"secret":"none"}
+{"draft":"Drop me a line at mike_t_1990@yahoo.com, I check it daily.","name":false,"personal":"contact","financial":false,"secret":"none"}
+{"draft":"My cell is 312-555-0198, call after 6pm.","name":false,"personal":"contact","financial":false,"secret":"none"}
+{"draft":"I live at 1428 Elm Street, Springfield, come say hi.","name":false,"personal":"precise","financial":false,"secret":"none"}
+{"draft":"Right now I'm sitting at the Starbucks on 5th and Pine, table by the window.","name":false,"personal":"precise","financial":false,"secret":"none"}
+{"draft":"My apartment is 4B, 221 Baker Road, Leeds LS6 2AB.","name":false,"personal":"precise","financial":false,"secret":"none"}
+{"draft":"Home address: 77 Rue de Rivoli, 75001 Paris. Packages welcome!","name":false,"personal":"precise","financial":false,"secret":"none"}
+{"draft":"I'm at gate B12 in Denver airport right now, flight delayed.","name":false,"personal":"precise","financial":false,"secret":"none"}
+{"draft":"We just moved to 9 Harbour View Lane, Sydney NSW 2000.","name":false,"personal":"precise","financial":false,"secret":"none"}
+{"draft":"My SSN is 078-05-1120, does anyone know how to freeze credit?","name":false,"personal":"identity","financial":false,"secret":"none"}
+{"draft":"Passport number X12345678 expires next year, need to renew.","name":false,"personal":"identity","financial":false,"secret":"none"}
+{"draft":"My driver's license number is D1234-56789-01234.","name":false,"personal":"identity","financial":false,"secret":"none"}
+{"draft":"National insurance number QQ 12 34 56 C, is that safe to share?","name":false,"personal":"identity","financial":false,"secret":"none"}
+{"draft":"Here's my Aadhaar: 2345 6789 0123, for the form.","name":false,"personal":"identity","financial":false,"secret":"none"}
+{"draft":"My card number is 4111 1111 1111 1234, exp 09/27.","name":false,"personal":"none","financial":true,"secret":"none"}
+{"draft":"I make about $85,000 a year as an engineer.","name":false,"personal":"none","financial":true,"secret":"none"}
+{"draft":"Still paying off $23k in student loans, ugh.","name":false,"personal":"none","financial":true,"secret":"none"}
+{"draft":"My checking account is 000123456789 at Chase, routing 021000021.","name":false,"personal":"none","financial":true,"secret":"none"}
+{"draft":"IBAN DE89 3704 0044 0532 0130 00 for the transfer.","name":false,"personal":"none","financial":true,"secret":"none"}
+{"draft":"My salary just went up to 4,200 euros a month.","name":false,"personal":"none","financial":true,"secret":"none"}
+{"draft":"I owe $6,500 on my Visa and can't make the minimum payment.","name":false,"personal":"none","financial":true,"secret":"none"}
+{"draft":"My password is Sunflower!2024, please don't tell anyone.","name":false,"personal":"none","financial":false,"secret":"credential"}
+{"draft":"The verification code they sent me is 482913.","name":false,"personal":"none","financial":false,"secret":"credential"}
+{"draft":"Use my API key sk-live-9f8a7b6c5d4e3f2a1b0c to test it.","name":false,"personal":"none","financial":false,"secret":"credential"}
+{"draft":"My PIN is 7351, I always forget it so writing it here.","name":false,"personal":"none","financial":false,"secret":"credential"}
+{"draft":"GitHub token ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8 works for the repo.","name":false,"personal":"none","financial":false,"secret":"credential"}
+{"draft":"Login is admin and pass is hunter2 for the router.","name":false,"personal":"none","financial":false,"secret":"credential"}
+{"draft":"Session cookie: sessionid=8f14e45fceea167a5a36dedd4bea2543","name":false,"personal":"none","financial":false,"secret":"credential"}
+{"draft":"My wallet seed phrase is: abandon ability able about above absent absorb abstract absurd abuse access accident","name":false,"personal":"none","financial":false,"secret":"privatekey"}
+{"draft":"-----BEGIN RSA PRIVATE KEY----- MIIEowIBAAKCAQEA7bq3 -----END RSA PRIVATE KEY----- that's my server key","name":false,"personal":"none","financial":false,"secret":"privatekey"}
+{"draft":"Recovery words for my Ledger: glove mixed riot alley tiger sauce lunar oven paddle dance robot enter","name":false,"personal":"none","financial":false,"secret":"privatekey"}
+{"draft":"Private key 0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318 holds my ETH.","name":false,"personal":"none","financial":false,"secret":"privatekey"}
+{"draft":"My SSH private key starts with -----BEGIN OPENSSH PRIVATE KEY----- b3BlbnNzaC1rZXktdjEAAAAA","name":false,"personal":"none","financial":false,"secret":"privatekey"}
+{"draft":"For the tutorial, use the example email user@example.com.","name":false,"personal":"fake","financial":false,"secret":"none"}
+{"draft":"Our support line is 1-800-555-0100, open 24/7.","name":false,"personal":"fake","financial":false,"secret":"none"}
+{"draft":"Visit us at our office, 1600 Amphitheatre Parkway, for the meetup.","name":false,"personal":"fake","financial":false,"secret":"none"}
+{"draft":"Set your password to something like YOUR_PASSWORD_HERE in the config.","name":false,"personal":"none","financial":false,"secret":"fake"}
+{"draft":"The docs show API_KEY=xxxxxxxxxxxx as a placeholder.","name":false,"personal":"none","financial":false,"secret":"fake"}
+{"draft":"Example token in the README: abc123-example-token.","name":false,"personal":"none","financial":false,"secret":"fake"}
+{"draft":"Write to info@ourcompany.com for business questions.","name":false,"personal":"fake","financial":false,"secret":"none"}
+{"draft":"Hi all! I love gardening, sci-fi books, and long walks.","name":false,"personal":"none","financial":false,"secret":"none"}
+{"draft":"New here. Mostly lurking, interested in woodworking.","name":false,"personal":"none","financial":false,"secret":"none"}
+{"draft":"Just a coffee addict who builds keyboards on weekends.","name":false,"personal":"none","financial":false,"secret":"none"}
+{"draft":"I'm a high school teacher who loves chess and jazz.","name":false,"personal":"none","financial":false,"secret":"none"}
+{"draft":"Hello! Looking forward to great discussions about photography.","name":false,"personal":"none","financial":false,"secret":"none"}
+{"draft":"Big fan of Taylor Swift and the Lakers, nothing else to say.","name":false,"personal":"none","financial":false,"secret":"none"}
+{"draft":"I work in finance but won't bore you with spreadsheets.","name":false,"personal":"none","financial":false,"secret":"none"}
+{"draft":"I'm learning Rust and keep forgetting my passwords, lol.","name":false,"personal":"none","financial":false,"secret":"none"}
+{"draft":"Hey, Ana Silva here! Email me at ana.silva.pt@gmail.com.","name":true,"personal":"contact","financial":false,"secret":"none"}
+{"draft":"I'm James Carter, born 5 May 1988, living at 12 Oak Ave, Austin.","name":true,"personal":"precise","financial":false,"secret":"none"}
+{"draft":"Liam O'Brien. My bank PIN is 9921, my income is 60k.","name":true,"personal":"none","financial":true,"secret":"credential"}
+{"draft":"Hi, I'm Chen Wei. My phone is 138 0013 8000.","name":true,"personal":"contact","financial":false,"secret":"none"}
+{"draft":"Name's Olivia Brown, SSN 219-09-9999, need help with taxes.","name":true,"personal":"identity","financial":false,"secret":"none"}
+{"draft":"Hola, soy Lucía Fernández y vivo en Calle Mayor 10, Madrid.","name":true,"personal":"precise","financial":false,"secret":"none"}
+{"draft":"Mi contraseña es Perro2023! y mi tarjeta es 5500 0000 0000 0004.","name":false,"personal":"none","financial":true,"secret":"credential"}
+{"draft":"我叫王芳，我的手机号是13912345678。","name":true,"personal":"contact","financial":false,"secret":"none"}
+{"draft":"我的生日是1990年5月20日，喜欢旅行。","name":false,"personal":"birthday","financial":false,"secret":"none"}
+{"draft":"My one-time code is 019284, it expires in 5 minutes.","name":false,"personal":"none","financial":false,"secret":"credential"}

@@ -19,15 +19,12 @@ test('the complete draft stays data inside the two-message context',()=>{
   assert.deepEqual(pplx.state,request.state);
   assert.equal(Object.keys(request.questions).length,4);
   assert.equal(Object.keys(pplx.questions).length,4);
-  for(const id of ['name','personal','financial'])assert.deepEqual(pplx.questions[id],request.questions[id]);
+  for(const id of ['name','personal','financial'])assert.deepEqual(Object.keys(pplx.questions[id].criteria??{}),Object.keys(request.questions[id].criteria??{}));
   assert.deepEqual(request.questions.secret.criteria,{
     password:'password or PIN',token:'API key, access token, or session cookie',otp:'one-time verification code',
     privatekey:'private key or wallet recovery phrase',fake:'only a placeholder, example, or public value',none:'no secret value',
   });
-  assert.deepEqual(pplx.questions.secret.criteria,{
-    credential:'password, PIN, one-time verification code, API key, access token, or session cookie',
-    privatekey:'private key or wallet recovery phrase',fake:'only a placeholder, example, or public value',none:'no secret value',
-  });
+  assert.deepEqual(Object.keys(pplx.questions.secret.criteria),['credential','privatekey','fake','none']);
   for(const c of categories){
     const q=pplx.questions[c.question];
     assert.ok(q.type==='noul'||Object.hasOwn(q.criteria,c.id),c.id);
