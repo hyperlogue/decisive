@@ -14,8 +14,6 @@ pub(super) mod q4;
 pub(super) mod grouped_q4;
 mod profile;
 mod shaders;
-#[cfg(feature = "kernel-checks")]
-pub(super) mod synthetic;
 use super::D;
 use anyhow::{Context, Result, ensure};
 use device::Device;
@@ -568,15 +566,6 @@ impl Gpu {
             markers.len() * D,
         )?;
         Ok(y)
-    }
-    #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
-    pub async fn layer(
-        &mut self,
-        tensors: &HashMap<String, Tensor>,
-        index: usize,
-        markers: Option<&[usize]>,
-    ) -> Result<()> {
-        self.layer_submitted(tensors, index, markers, || {}).await
     }
     pub async fn layer_submitted(
         &mut self,
