@@ -280,8 +280,19 @@ function rows(n, k, bits, seed) {
   return out;
 }
 
+// iOS throttles or drops GPU work while the page is hidden (screen lock, app switch), and the
+// wake lock is released then, so a round that saw the page hidden is rerun once it is visible.
+let interruptions = 0;
+const lock = async () => { try { await navigator.wakeLock?.request('screen'); } catch {} };
+document.addEventListener('visibilitychange', () => { if (document.hidden) interruptions++; else lock(); });
+const visible = () => new Promise(resolve => {
+  if (!document.hidden) return resolve();
+  const on = () => { if (!document.hidden) { document.removeEventListener('visibilitychange', on); resolve(); } };
+  document.addEventListener('visibilitychange', on);
+});
+
 async function main() {
-  try { await navigator.wakeLock?.request('screen'); } catch {}
+  await lock();
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw Error('WebGPU unavailable');
   if (!adapter.features.has('shader-f16')) throw Error('shader-f16 unavailable');
@@ -361,11 +372,20 @@ async function main() {
     const perRun = await batch(reference, 2);
     const reps = Math.max(2, Math.min(200, Math.ceil(TARGET_MS / Math.max(perRun, 0.05))));
     for (let round = 0; round < ROUNDS; round++) {
+      await visible();
       log(`${label}: round ${round + 1}/${ROUNDS}, ${candidates.length} variants, ${reps} dispatches per batch`);
+      const seen = interruptions, times = [];
       for (let j = 0; j < candidates.length; j++) {
         const c = candidates[(j + round) % candidates.length];
-        c.times.push(await batch(c, reps));
+        times.push([c, await batch(c, reps)]);
       }
+      if (interruptions !== seen || document.hidden) {
+        report.interrupted = (report.interrupted || 0) + 1;
+        log(`${label}: page was hidden, repeating round ${round + 1}`);
+        round--;
+        continue;
+      }
+      for (const [c, t] of times) c.times.push(t);
     }
     const median = t => { const s = [...t].sort((a, b) => a - b); return s[s.length >> 1]; };
     const base = median(reference.times);
