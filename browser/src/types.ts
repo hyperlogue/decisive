@@ -21,7 +21,8 @@ export interface LoadOptions<M extends Family, B extends Backend<M>> {
   source: { files: Record<string, Blob | Uint8Array | SyncReader> };
   format?: string;
   parameters?: Registry[NoInfer<M>][NoInfer<B>];
-  tuning?: { mode?: 'auto' | 'off'; budgetMs?: number };
+  // `cache` is a previous load's `info.tuning.cache`; it is ignored once the device, browser or kernels change.
+  tuning?: { mode?: 'auto' | 'off'; budgetMs?: number; cache?: Json };
 }
 export type Selection = { [M in Family]: { [B in Backend<M>]: LoadOptions<M, B> }[Backend<M>] }[Family];
 export interface CacheOptions { maxBytes?: number; requirePrefix?: boolean }

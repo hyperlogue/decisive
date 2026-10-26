@@ -68,6 +68,13 @@ pub(super) struct Gpu {
     fused_mlp: bool,
     // The selected int8_gemm kernel's [rows, columns] tile, when it replaced the tuned one.
     int8_gemm_tile: Option<[u32; 2]>,
+    // A previous load's selections, trusted only when their key matches this device and these
+    // kernels, and this load's selections under the same key for the caller to persist.
+    tuning_cache: serde_json::Value,
+    tuning_key: String,
+    // Rows per q4_mlp workgroup, 32 when a 32x64 candidate replaced it.
+    q4_mlp_rows: u32,
+    tuning_selected: serde_json::Map<String, serde_json::Value>,
     #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
     int8: Option<int8::State>,
     #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
@@ -218,6 +225,10 @@ impl Gpu {
             mlp_selection: serde_json::Value::Null,
             fused_mlp: true,
             int8_gemm_tile: None,
+            tuning_cache: serde_json::Value::Null,
+            tuning_key: String::new(),
+            q4_mlp_rows: 64,
+            tuning_selected: serde_json::Map::new(),
             #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             int8: None,
             #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
@@ -229,6 +240,15 @@ impl Gpu {
             #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
             q4_expansion: None,
         })
+    }
+    // This load's kernel selections for a later load to pass back, or null when none were made.
+    pub(crate) fn tuning_cache(&self) -> serde_json::Value {
+        if self.tuning_key.is_empty() || self.tuning_selected.is_empty() {
+            return serde_json::Value::Null;
+        }
+        let mut cache = self.tuning_selected.clone();
+        cache.insert("key".into(), self.tuning_key.clone().into());
+        cache.into()
     }
     pub fn info(&self) -> serde_json::Value {
         let info = &self.device.info;
@@ -269,7 +289,10 @@ impl Gpu {
             "timing":"wall-clock, synchronized per layer; not GPU timestamps"})
     }
     fn gemm_candidate_tile(name: &str) -> [u32; 2] {
-        if name == "int8_gemm_unrolled_32x64" { [32, 64] } else { [64, 64] }
+        if name.ends_with("_32x64") { [32, 64] } else { [64, 64] }
+    }
+    fn mlp_candidate_rows(name: &str) -> u32 {
+        if name.ends_with("_32x64") { 32 } else { 64 }
     }
     pub fn discard_scratch(&self) {
         self.packed_cache.borrow_mut().clear();
@@ -416,7 +439,8 @@ impl Gpu {
             [params[0], 1, 1]
         } else if matches!(
             name,
-            "int8_gemm" | "int8_raw" | "int8_gemm_unrolled_64x64" | "int8_gemm_unrolled_32x64" | "int8_gemm_r4x8"
+            "int8_gemm" | "int8_raw" | "int8_gemm_unrolled_32x64" | "int8_gemm_prefetch_64x64"
+                | "int8_gemm_prefetch_k2_64x64" | "int8_gemm_k8_32x64"
         ) {
             let tile = match name {
                 "int8_gemm" => self.int8_gemm_tile.unwrap_or(int8_tile),
@@ -426,8 +450,11 @@ impl Gpu {
             [params[1].div_ceil(tile[1]), params[0].div_ceil(tile[0]), 1]
         } else if name == "int8_gemm_narrow" {
             [params[1].div_ceil(32), params[0].div_ceil(32), 1]
-        } else if name == "int8_mlp" || name == "q4_mlp" {
+        } else if name == "int8_mlp" {
             [params[1].div_ceil(64), params[0].div_ceil(64), 1]
+        } else if name.starts_with("q4_mlp") {
+            let rows = if name == "q4_mlp" { self.q4_mlp_rows } else { Self::mlp_candidate_rows(name) };
+            [params[1].div_ceil(64), params[0].div_ceil(rows), 1]
         } else if name == "delta_scan_chained" {
             [128, 1, 1]
         } else if name == "delta_scan_staged" {

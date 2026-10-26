@@ -72,7 +72,7 @@ impl BrowserGpu {
         mode: &str,
         profile: bool,
     ) -> Result<BrowserGpu, JsValue> {
-        Self::configured(config, decision, joint, tokenizer, readout, headers_json, mode, profile, true, None).await
+        Self::configured(config, decision, joint, tokenizer, readout, headers_json, mode, profile, true, None, None).await
     }
 }
 
@@ -81,6 +81,7 @@ impl BrowserGpu {
     pub(crate) async fn configured(
         config: &[u8], decision: &[u8], joint: &[u8], tokenizer: &[u8],
         readout: &[u8], headers_json: &str, mode: &str, profile: bool, tune: bool, tuning_budget_ms: Option<u32>,
+        tuning_cache: Option<serde_json::Value>,
     ) -> Result<BrowserGpu, JsValue> {
         let (decoder_mode, auxiliary_bits) = match mode {
             "int8-all" => ("int8-tuned", 8),
@@ -95,7 +96,7 @@ impl BrowserGpu {
             "q8-e8" => ("q8-e8-reuse", 0),
             _ => (mode, 0),
         };
-        let gpu = webgpu::Gpu::checkpoint_with_tuning(decoder_mode, profile, tune, tuning_budget_ms)
+        let gpu = webgpu::Gpu::checkpoint_with_tuning(decoder_mode, profile, tune, tuning_budget_ms, tuning_cache)
             .await
             .map_err(error)?;
         let mut model = Self::from_parts(
@@ -116,6 +117,10 @@ impl BrowserGpu {
             reconstruct_rows(&mut model.engine.readout, D, auxiliary_bits).map_err(error)?;
         }
         Ok(model)
+    }
+    // Kernel selections for a later load's `tuning.cache`.
+    pub(crate) fn tuning_cache(&self) -> serde_json::Value {
+        self.gpu.tuning_cache()
     }
  }
 

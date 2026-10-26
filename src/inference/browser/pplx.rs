@@ -250,6 +250,7 @@ impl Runtime {
                     false,
                     tuning,
                     Some(config.tuning.budget_ms),
+                    config.tuning.cache.clone(),
                 )
                 .await
                 .map(Executor::Gpu)
@@ -371,7 +372,8 @@ impl Runtime {
         })
     }
     pub fn info(&self) -> Value {
-        serde_json::json!({"mode":if self.tuning { "auto" } else { "off" },"selection":serde_json::from_str::<Value>(&self.model.adapter()).unwrap_or(Value::Null)})
+        serde_json::json!({"mode":if self.tuning { "auto" } else { "off" },"selection":serde_json::from_str::<Value>(&self.model.adapter()).unwrap_or(Value::Null),
+            "cache":self.model.tuning_cache()})
     }
     fn prefetch(&self, layer: usize) -> Result<Reading> {
         let promises = js_sys::Array::new();
@@ -559,6 +561,13 @@ impl Executor {
     }
     fn supports_queued(&self) -> bool {
         matches!(self, Self::Gpu(m) if m.supports_queued())
+    }
+    fn tuning_cache(&self) -> Value {
+        match self {
+            #[cfg(any(feature = "kernel-checks", feature = "pplx-webgpu"))]
+            Self::Gpu(m) => m.tuning_cache(),
+            _ => Value::Null,
+        }
     }
     fn adapter(&self) -> String {
         match self {

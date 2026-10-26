@@ -15,12 +15,15 @@ pub enum TuningMode {
 pub struct TuningOptions {
     pub mode: TuningMode,
     pub budget_ms: u32,
+    // `info.tuning.cache` from an earlier load; used only while its key still matches.
+    pub cache: Option<Value>,
 }
 impl Default for TuningOptions {
     fn default() -> Self {
         Self {
             mode: TuningMode::Auto,
-            budget_ms: 2000,
+            budget_ms: 1000,
+            cache: None,
         }
     }
 }
@@ -35,6 +38,9 @@ impl TuningBudget {
             enabled,
             deadline: budget_ms.map(|budget| start + f64::from(budget)),
         }
+    }
+    pub fn deadline(&self) -> Option<f64> {
+        self.deadline
     }
     pub fn permits(&self, now: f64) -> bool {
         self.enabled && self.deadline.is_none_or(|deadline| now < deadline)

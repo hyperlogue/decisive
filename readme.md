@@ -77,9 +77,13 @@ on the same model returns `MODEL_BUSY`. Batches currently execute sequentially.
 
 Pplx layer reads, embedding caching, prefetching, GPU uploads, queue backpressure,
 and failure cleanup run in Rust. Loading accepts `tuning: {mode: 'auto' | 'off',
-budgetMs: 2000}`. The budget is cooperative between kernel-selection stages;
-an already-started stage finishes. Candidates retain the existing correctness
-gates. Tuning results stay with the loaded model and are not persisted.
+budgetMs: 1000, cache}`. The budget is cooperative between kernel-selection
+stages and their timing rounds; an already-started round finishes. Candidates
+must match the reference kernel bit for bit and be at least 1% faster.
+`model.info.tuning.cache` holds the selections; passing it back as
+`tuning.cache` on a later load skips the timing, rechecking only bitwise
+equality, while its key matches the adapter, browser, weight width and kernel
+sources. The demo keeps it in OPFS.
 Cancellation is cooperative: Pplx checks between layers and embedding reads;
 other backends finish their active prediction before acknowledging cancellation.
 

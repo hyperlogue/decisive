@@ -2,7 +2,7 @@ import type {StorageDirectory} from '../lib/model-store.js';
 import {ModelStore, LOCK_NAME} from '../lib/model-store.js';
 import {loadModelInWorker} from '@decisive/browser/local.js';
 import type {WasmModule} from '@decisive/browser/local.js';
-import type {Predictor, OpaqueCache, Request, Progress} from '@decisive/browser/types.js';
+import type {Json, Predictor, OpaqueCache, Request, Progress} from '@decisive/browser/types.js';
 import {inferenceConfig} from '../lib/inference-config.js';
 import {inferenceErrorKey} from '../lib/inference-errors.js';
 import {selectModel, requirePublished} from '../lib/model-catalog.js';
@@ -58,6 +58,29 @@ async function inspect(id?: string) {
   return state;
 }
 let loadedApi: API | undefined;
+// Pplx kernel selections per model from the last load, which Rust reuses while their key matches
+// this device, browser and kernels. Losing the file only costs one startup tuning run.
+const TUNING_FILE = 'pplx-tuning.json';
+async function tuningRoot() { return await navigator.storage.getDirectory() as unknown as StorageDirectory; }
+async function savedTuning(): Promise<Record<string, Json>> {
+  try {
+    const saved = JSON.parse(await (await (await (await tuningRoot()).getFileHandle(TUNING_FILE)).getFile()).text());
+    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+  } catch { return {}; }
+}
+async function saveTuning(id: string, cache: Json) {
+  if (!cache) return;
+  try {
+    const saved = await savedTuning();
+    if (JSON.stringify(saved[id]) === JSON.stringify(cache)) return;
+    saved[id] = cache;
+    const handle = await (await (await tuningRoot()).getFileHandle(TUNING_FILE, {create:true})).createSyncAccessHandle();
+    try {
+      const bytes = new TextEncoder().encode(JSON.stringify(saved));
+      handle.write(bytes, {at:0}); handle.truncate(bytes.length); handle.flush();
+    } finally { handle.close(); }
+  } catch {}
+}
 async function locked<T>(mode: LockMode, task: () => Promise<T>): Promise<T> {
   if (!navigator.locks) throw new Error('storageUnsupported');
   return navigator.locks.request(LOCK_NAME, {mode, ifAvailable:true}, lock => {
@@ -130,12 +153,14 @@ const methods: Record<string, (args: Args) => Promise<unknown>> = {
       let files: Awaited<ReturnType<ModelStore['readers']>>['files'];
       if (model.engine.startsWith('pplx-')) { const readers=await cache.readers(); files=readers.files; closeReaders=readers.close; }
       else files=await cache.files();
-      engine = await loadModelInWorker(loadedApi, inferenceConfig(model, files), {
+      const tuning = model.engine.startsWith('pplx-') ? (await savedTuning())[model.id] ?? null : null;
+      engine = await loadModelInWorker(loadedApi, inferenceConfig(model, files, tuning), {
         signal: cancellation!.signal,
         onProgress: (event: Progress) => notify({phase: activeModel ? 'analyzing' : 'loading',
           message: event.phase === 'inference' ? `Layer ${event.completed % 32 + 1}/32` : event.phase}),
       });
       inferenceCache = await engine.createCache();
+      if (model.engine.startsWith('pplx-')) await saveTuning(model.id, (engine.info.tuning as {cache?: Json} | null)?.cache ?? null);
       if(cancellation!.signal.aborted){await unload();throw new DOMException('Cancelled','AbortError');}
       activeModel=model.id;
       return {backend:'webgpu',model:model.name};
