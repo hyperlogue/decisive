@@ -61,6 +61,17 @@ for face in re.findall(r"@font-face\s*\{[^}]*\}", (fontsource / "400.css").read_
 if not faces:
     raise SystemExit("No font faces found in @fontsource/noto-sans-sc/400.css.")
 shutil.copyfile(fontsource / "LICENSE", fonts / "LICENSE.txt")
+noto_sans = SITE / "node_modules/@fontsource-variable/noto-sans"
+if not (noto_sans / "wght.css").is_file():
+    raise SystemExit("Missing Noto Sans font package. Run: npm ci --prefix site --ignore-scripts")
+noto_css = (noto_sans / "wght.css").read_text()
+noto_files = re.findall(r"url\(\./files/([\w-]+\.woff2)\)", noto_css)
+if not noto_files:
+    raise SystemExit("No font files found in @fontsource-variable/noto-sans/wght.css.")
+for name in noto_files:
+    shutil.copyfile(noto_sans / "files" / name, fonts / name)
+faces.append(noto_css.replace("url(./files/", "url(./assets/fonts/"))
+shutil.copyfile(noto_sans / "LICENSE", fonts / "NotoSans-LICENSE.txt")
 (dist / "style.css").write_text("\n".join(faces) + "\n" + (dist / "style.css").read_text())
 (dist / "pkg").mkdir()
 for name in ["decisive.js", "decisive_bg.wasm", "build.json"]:
