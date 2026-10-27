@@ -12,7 +12,7 @@ const strings = await fetch(new URL('./lib/locales.json', import.meta.url)).then
 const catalog=await fetch(new URL('./models.json',import.meta.url)).then(r=>r.json());
 let manifest=selectModel(catalog);
 let lang='en', ready=false, pending=false, result=null, operation=null, analysisError=null, modelError=null;
-let progress=null, selected=null, shareBlob=null, shareUrl=null, signalIds=new Set(), exporting=false, loadEpoch=0;
+let progress=null, selected=null, shareBlob=null, shareUrl=null, exporting=false, loadEpoch=0;
 let capabilities=null, estimate=null, compatibleWorker=false;
 const states=Object.fromEntries(catalog.models.map(model=>[model.id,emptyModelState(model)]));
 let statusKey='', storeState=states[manifest.id], deleteTarget=manifest.id;
@@ -87,13 +87,15 @@ const scheduler=new LatestAnalysis({
   },
   publish(value){result=value;pending=false;analysisError=null;paint();},
   fail(error){ready=false;pending=false;analysisError=error;scheduler.setEnabled(false);paint();},
-  pending(value){pending=value;result=null;selected=null;paint();},
+  pending(value){pending=value;if(!value){result=null;selected=null;}paint();},
 });
 
 function paintLanguage(){
   document.documentElement.lang=lang;document.documentElement.dir=lang==='ar'?'rtl':'ltr';document.title=t('pageTitle');
   $('language-picker').value=lang;
   document.querySelectorAll('[data-i18n]').forEach(el=>el.textContent=t(el.dataset.i18n));
+  const [before,after]=t('pageDescription').split('Decisive');
+  $('page-description').replaceChildren(before,$('project-link'),after??'');
   for(const [attribute,target] of [['aria','aria-label'],['title','title'],['alt','alt']]){
     document.querySelectorAll(`[data-${attribute}]`).forEach(el=>el.setAttribute(target,t(el.dataset[attribute])));
   }
@@ -119,43 +121,48 @@ function paintStatus(){
 }
 function paint(){
   const usable=ready&&!pending&&!!result;
-  const active=usable?result.scores.filter(c=>c.detected):[];
+  const active=result?result.scores.filter(c=>c.detected):[];
   paintStatus();
   $('share-result').disabled=!usable||exporting;
-  $('character-count').textContent=new Intl.NumberFormat(lang).format([...input.value].length)+' / 4,000';
+  const number=new Intl.NumberFormat(lang);
+  $('character-count').textContent=number.format(input.value.length)+' / '+number.format(input.maxLength);
   $('analysis-error').hidden=!analysisError;$('analysis-error').textContent=analysisError?t(errorKey(analysisError)):'';
   $('signal-list').hidden=!active.length;$('empty-signals').hidden=!!active.length;
-  const empty=!ready?(capabilities&&!capabilities.gpu?'webgpuRequired':'needSetup'):pending?'latestWaiting':!input.value.trim()?'startTyping':'none';
+  const empty=result?'none':!ready?(capabilities&&!capabilities.gpu?'webgpuRequired':'needSetup'):pending?'latestWaiting':!input.value.trim()?'startTyping':'none';
   $('empty-signal-text').textContent=t(empty);
   $('analysis-caption').textContent=active.length?t('count',{n:active.length}):t(empty);
-  const focus=document.activeElement?.closest('.signal-card')?.id;
-  $('signal-list').replaceChildren();
+  const list=$('signal-list');
+  for(const button of [...list.children])if(!active.some(c=>button.id===`signal-${c.id}`))button.remove();
   let entering=0;
-  for(const c of active){
-    const button=document.createElement('button');button.type='button';button.id=`signal-${c.id}`;button.className=`signal-card ${c.severity}${selected===c.id?' selected':''}`;
-    if(signalIds.has(c.id))button.style.animation='none';else button.style.setProperty('--enter',entering++);
-    button.innerHTML=`<span class="signal-icon">${icon(c.icon)}</span><span class="signal-text"><span class="signal-label"></span><span class="signal-meta"></span></span>`;
+  for(const [index,c] of active.entries()){
+    let button=$(`signal-${c.id}`);
+    if(!button){
+      button=document.createElement('button');button.type='button';button.id=`signal-${c.id}`;
+      button.style.setProperty('--enter',entering++);
+      button.innerHTML=`<span class="signal-icon">${icon(c.icon)}</span><span class="signal-label"></span>`;
+      // Keep the pill under the pointer until the tap completes and the header expands.
+      button.addEventListener('pointerdown',event=>{if(document.documentElement.classList.contains('editing'))event.preventDefault();});
+      button.addEventListener('click',()=>{input.blur();button.focus({preventScroll:true});selected=c.id;$('analysis-details').open=true;paint();scoreRows.get(c.id).scrollIntoView({behavior:'smooth',block:'center'});});
+    }
+    button.className=`signal-card ${c.severity}${selected===c.id?' selected':''}`;
     button.querySelector('.signal-label').textContent=strings[lang][`short_${c.id}`]??t(c.id);
-    button.querySelector('.signal-meta').textContent=t(c.severity==='strong'?'sensitive':'mild');
     button.title=`${t(c.id)} · ${t(c.severity==='strong'?'sensitive':'mild')} · ${t('modelScore')} ${c.score.toFixed(3)}`;
     button.setAttribute('aria-label',button.title);button.setAttribute('aria-pressed',String(selected===c.id));
-    button.addEventListener('click',()=>{selected=c.id;$('analysis-details').open=true;paint();scoreRows.get(c.id).scrollIntoView({behavior:'smooth',block:'center'});});
-    $('signal-list').append(button);
+    if(list.children[index]!==button)list.insertBefore(button,list.children[index]??null);
   }
-  if(focus)$(focus)?.focus({preventScroll:true});signalIds=new Set(active.map(c=>c.id));
   for(const c of categories){
-    const row=scoreRows.get(c.id),score=usable?result.scores.find(s=>s.id===c.id):null;
+    const row=scoreRows.get(c.id),score=result?.scores.find(s=>s.id===c.id);
     row.className=`score-row${score?.detected?' detected':''}${c.severity==='strong'?' strong':''}${selected===c.id?' selected':''}`;
     row.querySelector('.score-bar>span').style.width=`${(score?.score??0)*100}%`;
     row.querySelector('.score-value').textContent=score?score.score.toFixed(3):'—';
   }
-  $('runtime-time').textContent=usable&&Number.isFinite(result.elapsed)?
+  $('runtime-time').textContent=result&&Number.isFinite(result.elapsed)?
     result.elapsed<1000?t('uiTime',{n:new Intl.NumberFormat(lang,{maximumFractionDigits:0}).format(result.elapsed)}):
     t('seconds',{n:new Intl.NumberFormat(lang,{maximumFractionDigits:2}).format(result.elapsed/1000)}):'—';
-  const tokens=usable?result.output.response.usage?.input_tokens:null;
+  const tokens=result?.output.response.usage?.input_tokens;
   $('runtime-tokens').textContent=Number.isSafeInteger(tokens)&&tokens>=0?new Intl.NumberFormat(lang).format(tokens):'—';
-  $('raw-output').textContent=JSON.stringify(usable?{input:result.request,output:result.output.response,backend:result.output.backend,elapsed_ms:result.elapsed}:
-    analysisError?{error:analysisError.detail??t(errorKey(analysisError))}:{status:t(empty)},null,2);
+  $('raw-output').textContent=JSON.stringify(analysisError?{error:analysisError.detail??t(errorKey(analysisError))}:
+    result?{input:result.request,output:result.output.response,backend:result.output.backend,elapsed_ms:result.elapsed}:{status:t(empty)},null,2);
 }
 function paintSetup(){
   paintModelOptions();
@@ -256,6 +263,7 @@ async function stop(){
 }
 async function changeModel(id){
   if(operation||id===manifest.id)return;
+  result=null;selected=null;
   ready=false;compatibleWorker=false;scheduler.setEnabled(false);operation='switching';paintStorage();
   try{await client.call('unload');manifest=selectModel(catalog,id);storeState=states[id];analysisError=null;modelError=null;statusKey='';}
   catch(error){modelError=error;}
@@ -326,11 +334,17 @@ $('native-share').addEventListener('click',async()=>{
 });
 shareDialog.addEventListener('close',()=>{if(shareUrl)URL.revokeObjectURL(shareUrl);shareUrl=null;shareBlob=null;$('share-image').removeAttribute('src');});
 function adaptViewport(){
-  const height=Math.round(window.visualViewport?.height??innerHeight),wasCompact=document.documentElement.classList.contains('compact-viewport');
-  document.documentElement.style.setProperty('--app-height',`${height}px`);document.documentElement.classList.toggle('compact-viewport',height<560);
-  if(height<560&&!wasCompact&&document.activeElement===input)$('analysis-scroll').scrollTop=0;
+  const root=document.documentElement,viewport=window.visualViewport,height=Math.round(viewport?.height??innerHeight);
+  const wasEditing=root.classList.contains('editing'),wasCompact=root.classList.contains('compact-viewport');
+  const editing=document.activeElement===input&&matchMedia('(max-width: 979px)').matches;
+  root.style.setProperty('--app-height',`${height}px`);
+  root.style.setProperty('--viewport-top',`${viewport?.offsetTop??0}px`);
+  root.classList.toggle('compact-viewport',height<560);root.classList.toggle('editing',editing);
+  if(editing&&(!wasEditing||height<560&&!wasCompact))$('analysis-scroll').scrollTop=0;
 }
-window.visualViewport?.addEventListener('resize',adaptViewport);window.addEventListener('resize',adaptViewport);adaptViewport();
+input.addEventListener('focus',adaptViewport);input.addEventListener('blur',adaptViewport);
+window.visualViewport?.addEventListener('resize',adaptViewport);window.visualViewport?.addEventListener('scroll',adaptViewport);
+window.addEventListener('resize',adaptViewport);adaptViewport();
 paintLanguage();
 observeAnalysisMotion($('live-analysis'));
 const checked=await probeCapabilities();

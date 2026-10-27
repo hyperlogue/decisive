@@ -30,7 +30,7 @@
           <button class="icon-button" id="open-setup" type="button" data-title="setup" aria-label="Setup"><span data-icon="sliders"></span></button>
         </nav>
       </div>
-      <p id="page-description" class="page-description" data-i18n="pageDescription">See what personal information your message may reveal as you type. This demo shows Decisive running AI inference directly in your browser with WebGPU.</p>
+      <p id="page-description" class="page-description">See what personal information your message may reveal as you type. This demo shows <a id="project-link" class="project-link" href="https://github.com/hyperlogue/decisive" target="_blank" rel="noopener noreferrer" aria-label="Decisive · GitHub"><span data-icon="github"></span><span translate="no">Decisive</span></a> running AI inference directly in your browser with WebGPU.</p>
       <div class="header-secondary">
         <div class="privacy-wrap">
           <button class="privacy-pill" id="privacy-help" type="button" aria-expanded="false" aria-controls="privacy-tooltip"><span data-icon="shield"></span><span data-i18n="onDevice">Your messages stay in this browser.</span></button>
@@ -43,7 +43,7 @@
         <div class="draft-region" id="draft-region">
           <div class="composer" id="draft-composer">
             <div class="composer-top"><label for="message-input" data-i18n="yourReply">Your message</label></div>
-            <textarea id="message-input" dir="auto" spellcheck="false" maxlength="4000" aria-describedby="composer-status"></textarea>
+            <textarea id="message-input" dir="auto" spellcheck="false" maxlength="1000" aria-describedby="composer-status"></textarea>
             <div class="composer-bottom"><span class="composer-status"><span class="little-dot" id="composer-dot"></span><span id="composer-status"></span></span><span id="character-count">0</span></div>
           </div>
         </div>
@@ -51,16 +51,16 @@
         <div id="analysis-error" class="notice error" role="alert" hidden></div>
 <aside class="analysis-panel" id="live-analysis" aria-labelledby="analysis-title">
         <div class="section-heading"><h2 id="analysis-title" data-i18n="liveAnalysis">Analysis</h2><span class="live-status" id="analysis-status"><span class="little-dot"></span><span data-i18n="live">Live</span></span></div>
-        <dl class="inference-metrics" id="inference-metrics">
-          <div><dt data-i18n="model">Model</dt><dd id="runtime-model">Decima Small</dd></div>
-          <div><dt data-i18n="inferenceTime">Inference time</dt><dd id="runtime-time">—</dd></div>
-          <div data-title="inputTokensHelp"><dt data-i18n="inputTokens">Input tokens</dt><dd id="runtime-tokens">—</dd></div>
-        </dl>
         <div class="analysis-summary" id="analysis-summary" role="group" aria-label="Possible disclosures" data-aria="cardResults">
           <div class="signal-list" id="signal-list"></div>
           <div class="empty-signals" id="empty-signals"><span data-icon="shield"></span><span id="empty-signal-text"></span></div>
           <p id="analysis-caption" class="sr-only" aria-live="polite" aria-atomic="true"></p>
         </div>
+        <dl class="inference-metrics" id="inference-metrics">
+          <div><dt data-i18n="model">Model</dt><dd id="runtime-model">Decima Small</dd></div>
+          <div><dt data-i18n="inferenceTime">Inference time</dt><dd id="runtime-time">—</dd></div>
+          <div data-title="inputTokensHelp"><dt data-i18n="inputTokens">Input tokens</dt><dd id="runtime-tokens">—</dd></div>
+        </dl>
         <details class="analysis-details" id="analysis-details">
           <summary id="show-details-toggle"><span id="details-label" data-i18n="showDetails">Show details</span><span class="details-chevron" data-icon="chevron"></span></summary>
           <div class="details-content" id="details-content">

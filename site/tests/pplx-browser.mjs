@@ -67,7 +67,7 @@ try{
   assert.match(await page.locator('#signal-credential').getAttribute('aria-label'),/Access credentials/);
   assert.equal(await page.locator('#signal-name, #signal-birthday, #signal-privatekey, #signal-password, #signal-token, #signal-otp').count(),0);
   assert.equal(await page.locator('#score-credential .score-value').textContent(),'0.810');
-  await page.fill('#message-input',privateKeyDraft);await page.waitForSelector('#signal-credential');
+  await page.fill('#message-input',privateKeyDraft);await page.waitForFunction(()=>!document.getElementById('share-result').disabled);
   assert.equal(await page.locator('#score-credential .score-value').textContent(),'0.910');
   assert.equal(await page.locator('#signal-privatekey').count(),0);
   assert.equal(requests.length,2);

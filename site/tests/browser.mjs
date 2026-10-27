@@ -48,8 +48,9 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
  assert.equal(await page.locator('#setup-error').isVisible(),false);
  await page.screenshot({path:path.join(screenshots,'setup-mobile.png')});
  await page.click('#close-setup');await page.fill('#message-input','Private test text: alex@example.com');
+ await page.locator('#message-input').blur();
  assert.equal(await page.locator('#enable-analysis').count(),0);
- assert.match(await page.locator('#page-description').innerText(),/Decisive.*WebGPU/);
+ assert.match(await page.locator('#page-description').textContent(),/Decisive.*WebGPU/);
  assert.equal(await page.evaluate(()=>{
    const box=id=>document.getElementById(id).getBoundingClientRect();
    return Math.abs(box('draft-region').top-box('site-header').bottom)<1&&
@@ -59,6 +60,9 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
  assert.equal(await page.locator('#share-result').isDisabled(),true);
  for(const locale of ['en','es','zh','ar']){
    await page.selectOption('#language-picker',locale);
+   assert.equal(await page.locator('#page-description #project-link').getAttribute('href'),'https://github.com/hyperlogue/decisive');
+   assert.equal(await page.locator('#project-link svg').count(),1);
+   assert.equal(await page.locator('#project-link').innerText(),'Decisive');
    assert.equal(await page.evaluate(()=>document.documentElement.dir),locale==='ar'?'rtl':'ltr');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  }
@@ -150,23 +154,29 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
    }
  }
  const privateKeyOutput=structuredClone(credentialOutput);
+ credentialOutput.elapsed_ms=245;credentialOutput.response.usage.input_tokens=41;
+ privateKeyOutput.elapsed_ms=310;privateKeyOutput.response.usage.input_tokens=62;
  privateKeyOutput.response.answers.secret.max_probabilities.privatekey=.94;
  Object.assign(credentialOutput.response.answers.secret.max_probabilities,{password:.61,token:.72,otp:.83});
+ const allOutput=structuredClone(credentialOutput);
+ Object.assign(allOutput.response.answers.personal.max_probabilities,{contact:.9,precise:.9,identity:.9});
+ allOutput.response.answers.financial.noul=.9;
  const productionCatalog=await fetch(new URL('models.json',base)).then(r=>r.json());
  const productionManifest=productionCatalog.models.find(m=>m.id===productionCatalog.default);
  const files=Object.entries(productionManifest.files).map(([name,f])=>({name,expected:f.bytes,bytes:f.bytes,verified:true,state:'verified'}));
  const total=files.reduce((n,f)=>n+f.bytes,0);
  const state={modelId:productionManifest.id,revision:productionManifest.revision,files,total,stored:total,verified:total,remaining:0,ready:true,legacyStored:0};
- const recordedWorker=`const state=${JSON.stringify(state)}, output=${JSON.stringify(recorded.output)}, credentialOutput=${JSON.stringify(credentialOutput)}, privateKeyOutput=${JSON.stringify(privateKeyOutput)};
+ const recordedWorker=`const state=${JSON.stringify(state)}, output=${JSON.stringify(recorded.output)}, credentialOutput=${JSON.stringify(credentialOutput)}, privateKeyOutput=${JSON.stringify(privateKeyOutput)}, allOutput=${JSON.stringify(allOutput)};
  self.onmessage=({data:{id,method,args}})=>{
    if(method==='load' && args?.backend && args.backend!=='webgpu'){self.postMessage({id,error:'webgpuRequired'});return;}
    if(method==='predict' && (!args.request.questions.secret.criteria.otp || args.request.questions.secret.criteria.credential)){self.postMessage({id,error:'invalidOutput'});return;}
    const result=method==='inspect'?state:method==='capabilities'?{sync:true,gpu:true}:method==='predict'?
+     args.request.state.context[1].content==='all five fixture'?allOutput:
      args.request.state.context[1].content===${JSON.stringify(privateKeyDraft)}?privateKeyOutput:
      args.request.state.context[1].content===${JSON.stringify(credentialDraft)}?credentialOutput:output:{};
    setTimeout(()=>self.postMessage({id,result}),method==='predict'?600:0);
  };`;
- const ui=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
+ const ui=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,serviceWorkers:'block'});
  await ui.route('**/workers/model-worker.js',r=>r.fulfill({contentType:'text/javascript',body:recordedWorker}));
  const view=await ui.newPage();view.on('pageerror',e=>errors.push(e.message));
  await view.goto(base);await view.waitForSelector('#intro-dialog[open]');await view.click('#intro-continue');await view.waitForSelector('#setup-dialog[open]');await view.click('#start-analysis');
@@ -176,6 +186,7 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
  assert.equal(await view.locator('.signal-card').count(),1);
  assert.equal(await view.locator('#runtime-tokens').innerText(),'74');
  assert.equal(await view.locator('#runtime-time').innerText(),'33.19 s');
+ await view.locator('#message-input').blur();
  const analysisBox=await view.locator('#analysis-scroll').boundingBox();
  const draftBox=await view.locator('#draft-region').boundingBox();
  await view.click('#signal-contact');assert.equal(await view.locator('#analysis-details').getAttribute('open'),'');
@@ -187,18 +198,27 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
  assert.equal(Object.hasOwn(raw.input.questions.personal.criteria,'birthday'),false);
  assert.equal(raw.output.answers.personal.probabilities.contact,recorded.output.response.answers.personal.probabilities.contact);
  await view.screenshot({path:path.join(screenshots,'analysis-mobile.png')});
- await view.fill('#message-input','draft changing');assert.equal(await view.locator('.signal-card').count(),0);
- assert.equal(await view.locator('#runtime-tokens').innerText(),'—');
- assert.equal(await view.locator('#runtime-time').innerText(),'—');
+ await view.evaluate(()=>{window.previousSignal=document.getElementById('signal-contact');});
+ await view.fill('#message-input','draft changing');
+ await view.waitForFunction(()=>document.getElementById('composer-status').textContent==='Analyzing…');
+ assert.deepEqual(await view.evaluate(()=>({
+   samePill:window.previousSignal===document.getElementById('signal-contact'),
+   tokens:document.getElementById('runtime-tokens').textContent,
+   time:document.getElementById('runtime-time').textContent,
+   score:document.querySelector('#score-contact .score-value').textContent,
+ })),{samePill:true,tokens:'74',time:'33.19 s',score:'0.778'});
  assert.equal(await view.locator('#share-result').isDisabled(),true);
  await view.fill('#message-input',credentialDraft);await view.waitForSelector('#signal-credential');
  assert.equal(await view.locator('.signal-card').count(),1);
  assert.equal(await view.locator('#score-credential .score-value').innerText(),'0.830');
+ assert.equal(await view.locator('#runtime-time').innerText(),'245 ms');
+ assert.equal(await view.locator('#runtime-tokens').innerText(),'41');
  await view.screenshot({path:path.join(screenshots,'credentials-mobile.png')});
- await view.fill('#message-input',privateKeyDraft);await view.waitForSelector('#signal-credential');
+ await view.fill('#message-input',privateKeyDraft);await view.waitForFunction(()=>!document.getElementById('share-result').disabled);
  assert.equal(await view.locator('.signal-card').count(),1);
  assert.equal(await view.locator('#signal-privatekey').count(),0);
  assert.equal(await view.locator('#score-credential .score-value').innerText(),'0.940');
+ await view.locator('#message-input').blur();
  await view.evaluate(()=>{
    const fillText=CanvasRenderingContext2D.prototype.fillText;
    CanvasRenderingContext2D.prototype.fillText=function(text,...args){window.sharedText.push(text);return fillText.call(this,text,...args);};
@@ -215,15 +235,59 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
    const download=await saved;assert.equal(download.suggestedFilename(),'privacy-analysis.png');
    await view.click('#close-share');
  }
+ await view.selectOption('#language-picker','en');
+ await view.setViewportSize({width:390,height:400});
+ await view.fill('#message-input','all five fixture');await view.waitForFunction(()=>!document.getElementById('share-result').disabled);
+ assert.equal(await view.locator('.signal-card').count(),5);
+ assert.equal(await view.locator('#page-description').isVisible(),false);
+ assert.equal(await view.locator('.header-secondary').isVisible(),false);
+ assert.equal(await view.locator('#analysis-title').isVisible(),false);
+ const pillsFit=()=>{
+   const input=document.getElementById('draft-region').getBoundingClientRect();
+   const pills=[...document.querySelectorAll('.signal-card')].map(el=>el.getBoundingClientRect());
+   const metrics=document.getElementById('inference-metrics').getBoundingClientRect();
+   return pills.every(box=>box.top>=input.bottom&&box.bottom<=innerHeight&&box.height<=40)&&metrics.top>=pills.at(-1).bottom;
+ };
+ await view.screenshot({path:path.join(screenshots,'typing-mobile.png'),animations:'disabled'});
+ assert.equal(await view.evaluate(pillsFit),true,'all five pills fit below the focused input at keyboard height');
+ await view.tap('#signal-credential');
+ assert.equal(await view.locator('#analysis-details').getAttribute('open'),'','tapping a pill works as the keyboard layout closes');
+ assert.equal(await view.locator('#signal-credential').getAttribute('aria-pressed'),'true');
+ await view.locator('#message-input').focus();
+ await view.emulateMedia({colorScheme:'dark'});
+ await view.screenshot({path:path.join(screenshots,'typing-mobile-dark.png'),animations:'disabled'});
+ await view.locator('#message-input').blur();await view.selectOption('#language-picker','ar');await view.locator('#message-input').focus();
+ await view.screenshot({path:path.join(screenshots,'typing-mobile-ar.png'),animations:'disabled'});
+ assert.equal(await view.evaluate(pillsFit),true,'Arabic pills fit at keyboard height');
+ await view.evaluate(()=>{
+   Object.defineProperties(visualViewport,{height:{value:360,configurable:true},offsetTop:{value:40,configurable:true}});
+   visualViewport.dispatchEvent(new Event('resize'));
+ });
+ assert.deepEqual(await view.locator('#app-shell').evaluate(el=>{const box=el.getBoundingClientRect();return {top:box.top,height:box.height};}),{top:40,height:360},'follow an offset visual viewport');
+ await view.evaluate(()=>{delete visualViewport.height;delete visualViewport.offsetTop;visualViewport.dispatchEvent(new Event('resize'));});
  await view.setViewportSize({width:320,height:480});
  assert.equal(await view.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  assert.equal(await view.locator('#message-input').isVisible(),true);
  await view.emulateMedia({reducedMotion:'reduce'});
  await view.fill('#message-input','A new draft');
- await view.waitForSelector('#signal-contact');
+ await view.waitForFunction(()=>!document.getElementById('share-result').disabled);
  assert.equal(await view.locator('#live-analysis').evaluate(el=>el.getAnimations({subtree:true}).length),0);
+ await view.fill('#message-input','');
+ assert.equal(await view.locator('.signal-card').count(),0);
+ assert.equal(await view.locator('#runtime-time').innerText(),'—');
+ assert.equal(await view.locator('#runtime-tokens').innerText(),'—');
+ await view.setViewportSize({width:1100,height:850});
+ await view.fill('#message-input','all five fixture');await view.waitForFunction(()=>!document.getElementById('share-result').disabled);
+ assert.equal(await view.locator('#page-description').isVisible(),true,'desktop header stays visible while typing');
+ await view.screenshot({path:path.join(screenshots,'pills-desktop-dark.png'),animations:'disabled'});
+ await view.emulateMedia({colorScheme:'light'});
+ await view.screenshot({path:path.join(screenshots,'pills-desktop.png'),animations:'disabled'});
+ await view.fill('#message-input','x'.repeat(1001));
+ assert.equal((await view.locator('#message-input').inputValue()).length,1000);
+ await view.selectOption('#language-picker','en');
+ assert.equal(await view.locator('#character-count').textContent(),'1,000 / 1,000');
  assert.deepEqual(errors,[]);await ui.close();
- console.log('Recorded and synthetic output: icons, details, merged credentials, draft invalidation, four-language PNG export: PASS');
+ console.log('Recorded and synthetic output: pills, retained results, mobile typing, character limit, four-language PNG export: PASS');
 
  const unavailable=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
  await unavailable.route('**/lib/webgpu.js',r=>r.fulfill({contentType:'text/javascript',body:'export async function checkWebGPU(){return false;}'}));
