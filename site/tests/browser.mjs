@@ -140,6 +140,7 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
  const recorded=JSON.parse(await fs.readFile(new URL('./fixtures/english-result.json',import.meta.url)));
  const locales=JSON.parse(await fs.readFile(new URL('../lib/locales.json',import.meta.url)));
  const credentialDraft='My password is Birch!42 and the verification code is 739204.';
+ const privateKeyDraft='My wallet recovery phrase is: abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about.';
  const credentialOutput=structuredClone(recorded.output);
  for(const answer of Object.values(credentialOutput.response.answers)){
    if(answer.type==='noul')answer.noul=0;
@@ -148,17 +149,20 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
      answer.max_probabilities={...answer.probabilities};
    }
  }
+ const privateKeyOutput=structuredClone(credentialOutput);
+ privateKeyOutput.response.answers.secret.max_probabilities.privatekey=.94;
  Object.assign(credentialOutput.response.answers.secret.max_probabilities,{password:.61,token:.72,otp:.83});
  const productionCatalog=await fetch(new URL('models.json',base)).then(r=>r.json());
  const productionManifest=productionCatalog.models.find(m=>m.id===productionCatalog.default);
  const files=Object.entries(productionManifest.files).map(([name,f])=>({name,expected:f.bytes,bytes:f.bytes,verified:true,state:'verified'}));
  const total=files.reduce((n,f)=>n+f.bytes,0);
  const state={modelId:productionManifest.id,revision:productionManifest.revision,files,total,stored:total,verified:total,remaining:0,ready:true,legacyStored:0};
- const recordedWorker=`const state=${JSON.stringify(state)}, output=${JSON.stringify(recorded.output)}, credentialOutput=${JSON.stringify(credentialOutput)};
+ const recordedWorker=`const state=${JSON.stringify(state)}, output=${JSON.stringify(recorded.output)}, credentialOutput=${JSON.stringify(credentialOutput)}, privateKeyOutput=${JSON.stringify(privateKeyOutput)};
  self.onmessage=({data:{id,method,args}})=>{
    if(method==='load' && args?.backend && args.backend!=='webgpu'){self.postMessage({id,error:'webgpuRequired'});return;}
    if(method==='predict' && (!args.request.questions.secret.criteria.otp || args.request.questions.secret.criteria.credential)){self.postMessage({id,error:'invalidOutput'});return;}
    const result=method==='inspect'?state:method==='capabilities'?{sync:true,gpu:true}:method==='predict'?
+     args.request.state.context[1].content===${JSON.stringify(privateKeyDraft)}?privateKeyOutput:
      args.request.state.context[1].content===${JSON.stringify(credentialDraft)}?credentialOutput:output:{};
    setTimeout(()=>self.postMessage({id,result}),method==='predict'?600:0);
  };`;
@@ -166,19 +170,22 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
  await ui.route('**/workers/model-worker.js',r=>r.fulfill({contentType:'text/javascript',body:recordedWorker}));
  const view=await ui.newPage();view.on('pageerror',e=>errors.push(e.message));
  await view.goto(base);await view.waitForSelector('#intro-dialog[open]');await view.click('#intro-continue');await view.waitForSelector('#setup-dialog[open]');await view.click('#start-analysis');
- assert.equal(await view.locator('.score-row').count(),8);
- assert.equal(await view.locator('#score-password, #score-token, #score-otp').count(),0);
- await view.fill('#message-input',recorded.draft);await view.waitForSelector('#signal-name');
- assert.equal(await view.locator('.signal-card').count(),Object.values(recorded.output.response.answers).flatMap(a=>a.type==='noul'?[a.noul]:Object.entries(a.max_probabilities??a.probabilities).filter(([k])=>!['fake','none'].includes(k)).map(([,p])=>p)).filter(p=>p>=0.5).length);
+ assert.equal(await view.locator('.score-row').count(),5);
+ assert.equal(await view.locator('#score-name, #score-birthday, #score-privatekey, #score-password, #score-token, #score-otp').count(),0);
+ await view.fill('#message-input',recorded.draft);await view.waitForSelector('#signal-contact');
+ assert.equal(await view.locator('.signal-card').count(),1);
  assert.equal(await view.locator('#runtime-tokens').innerText(),'74');
  assert.equal(await view.locator('#runtime-time').innerText(),'33.19 s');
  const analysisBox=await view.locator('#analysis-scroll').boundingBox();
  const draftBox=await view.locator('#draft-region').boundingBox();
- await view.click('#signal-name');assert.equal(await view.locator('#analysis-details').getAttribute('open'),'');
+ await view.click('#signal-contact');assert.equal(await view.locator('#analysis-details').getAttribute('open'),'');
  await view.locator('#analysis-scroll').evaluate(el=>el.scrollTop=el.scrollHeight);
  assert.deepEqual(await view.locator('#analysis-scroll').boundingBox(),analysisBox,'analysis viewport stays fixed as details expand');
  assert.deepEqual(await view.locator('#draft-region').boundingBox(),draftBox,'analysis scrolling does not move draft');
- assert.equal(JSON.parse(await view.locator('#raw-output').textContent()).output.answers.name.noul,recorded.output.response.answers.name.noul);
+ const raw=JSON.parse(await view.locator('#raw-output').textContent());
+ assert.deepEqual(Object.keys(raw.input.questions),['personal','financial','secret']);
+ assert.equal(Object.hasOwn(raw.input.questions.personal.criteria,'birthday'),false);
+ assert.equal(raw.output.answers.personal.probabilities.contact,recorded.output.response.answers.personal.probabilities.contact);
  await view.screenshot({path:path.join(screenshots,'analysis-mobile.png')});
  await view.fill('#message-input','draft changing');assert.equal(await view.locator('.signal-card').count(),0);
  assert.equal(await view.locator('#runtime-tokens').innerText(),'—');
@@ -188,6 +195,10 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
  assert.equal(await view.locator('.signal-card').count(),1);
  assert.equal(await view.locator('#score-credential .score-value').innerText(),'0.830');
  await view.screenshot({path:path.join(screenshots,'credentials-mobile.png')});
+ await view.fill('#message-input',privateKeyDraft);await view.waitForSelector('#signal-credential');
+ assert.equal(await view.locator('.signal-card').count(),1);
+ assert.equal(await view.locator('#signal-privatekey').count(),0);
+ assert.equal(await view.locator('#score-credential .score-value').innerText(),'0.940');
  await view.evaluate(()=>{
    const fillText=CanvasRenderingContext2D.prototype.fillText;
    CanvasRenderingContext2D.prototype.fillText=function(text,...args){window.sharedText.push(text);return fillText.call(this,text,...args);};
@@ -209,7 +220,7 @@ assert.equal(await page.evaluate(()=>document.getElementById('setup-error').prev
  assert.equal(await view.locator('#message-input').isVisible(),true);
  await view.emulateMedia({reducedMotion:'reduce'});
  await view.fill('#message-input','A new draft');
- await view.waitForSelector('#signal-name');
+ await view.waitForSelector('#signal-contact');
  assert.equal(await view.locator('#live-analysis').evaluate(el=>el.getAnimations({subtree:true}).length),0);
  assert.deepEqual(errors,[]);await ui.close();
  console.log('Recorded and synthetic output: icons, details, merged credentials, draft invalidation, four-language PNG export: PASS');

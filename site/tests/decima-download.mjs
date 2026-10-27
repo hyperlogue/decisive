@@ -23,7 +23,7 @@ try{
   await page.waitForFunction(()=>!document.querySelector('#share-result').disabled||!document.querySelector('#analysis-error').hidden,null,{timeout:300000});
   assert.equal(await page.locator('#analysis-error').isVisible(),false,await page.locator('#analysis-error').textContent());
   const output=JSON.parse(await page.locator('#raw-output').textContent());
-  assert.equal(output.backend,'webgpu');assert.equal(Object.keys(output.output.answers).length,4);
+  assert.equal(output.backend,'webgpu');assert.equal(Object.keys(output.output.answers).length,3);
   await fs.writeFile('/tmp/decima-browser-download.json',JSON.stringify(output,null,2));
   await page.screenshot({path:'/tmp/decima-real-analysis.png'});
   console.log('Real Decima analysis completed',Math.round(output.elapsed_ms)+' ms');

@@ -11,6 +11,7 @@ const recorded=JSON.parse(await fs.readFile(new URL('./fixtures/english-result.j
 for(const answer of Object.values(recorded.output.response.answers)){delete answer.max_probabilities;delete answer.chunk;}
 recorded.output.response.answers.secret={type:'choice',choice:'none',probabilities:{credential:.1,privatekey:.1,fake:.2,none:.6}};
 const credentialDraft='The login code is 739204.';
+const privateKeyDraft='My private key is: -----BEGIN PRIVATE KEY----- test fixture -----END PRIVATE KEY-----';
 const double=`export async function loadModelInWorker(api,options,controls){
   if(options.backend!=='webgpu'||options.format!=='q4-e4')throw Error('Wrong Q4 configuration');
   if(!options.source.files['q4-e4-layer-00.bin'])throw Error('Wrong checkpoint');
@@ -26,6 +27,7 @@ const double=`export async function loadModelInWorker(api,options,controls){
     for(let i=1;i<=32;i++){await new Promise(r=>setTimeout(r,draft==='cancel this inference'?200:30));signal.throwIfAborted();controls.onProgress({phase:'inference',completed:i-1,total:32});}
     const response=${JSON.stringify(recorded.output.response)};
     if(draft===${JSON.stringify(credentialDraft)})response.answers.secret={type:'choice',choice:'credential',probabilities:{credential:.81,privatekey:.04,fake:.05,none:.1}};
+    if(draft===${JSON.stringify(privateKeyDraft)})response.answers.secret={type:'choice',choice:'privatekey',probabilities:{credential:.04,privatekey:.91,fake:.03,none:.02}};
     return {response,backend:'webgpu',elapsed_ms:123};
   }};
 }`;
@@ -58,10 +60,16 @@ try{
   assert.equal(raw.input.state.context[1].content,recorded.draft);assert.equal(Object.hasOwn(raw.input,'long'),false);
   assert.equal(raw.elapsed_ms,123);assert.equal(await page.locator('#runtime-model').innerText(),fixture.name);
   assert.ok(raw.input.questions.secret.criteria.credential);
+  assert.deepEqual(Object.keys(raw.input.questions),['personal','financial','secret']);
+  assert.equal(Object.hasOwn(raw.input.questions.personal.criteria,'birthday'),false);
+  assert.equal(await page.locator('.score-row').count(),5);
   await page.fill('#message-input',credentialDraft);await page.waitForSelector('#signal-credential');
   assert.match(await page.locator('#signal-credential').getAttribute('aria-label'),/Access credentials/);
-  assert.equal(await page.locator('#signal-password, #signal-token, #signal-otp').count(),0);
+  assert.equal(await page.locator('#signal-name, #signal-birthday, #signal-privatekey, #signal-password, #signal-token, #signal-otp').count(),0);
   assert.equal(await page.locator('#score-credential .score-value').textContent(),'0.810');
+  await page.fill('#message-input',privateKeyDraft);await page.waitForSelector('#signal-credential');
+  assert.equal(await page.locator('#score-credential .score-value').textContent(),'0.910');
+  assert.equal(await page.locator('#signal-privatekey').count(),0);
   assert.equal(requests.length,2);
   await page.reload();await page.waitForSelector('#intro-dialog[open]');await page.click('#intro-continue');await page.waitForSelector('#setup-dialog[open]');
   await page.click('#setup-models [data-model="pplx-flash-q4"] .model-pick');

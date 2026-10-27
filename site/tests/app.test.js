@@ -17,9 +17,10 @@ test('the complete draft stays data inside the two-message context',()=>{
   const pplx=buildRequest(text,'pplx-q4');
   assert.equal(Object.hasOwn(pplx,'long'),false);
   assert.deepEqual(pplx.state,request.state);
-  assert.equal(Object.keys(request.questions).length,4);
-  assert.equal(Object.keys(pplx.questions).length,4);
-  for(const id of ['name','personal','financial'])assert.deepEqual(Object.keys(pplx.questions[id].criteria??{}),Object.keys(request.questions[id].criteria??{}));
+  assert.deepEqual(Object.keys(request.questions),['personal','financial','secret']);
+  assert.deepEqual(Object.keys(pplx.questions),['personal','financial','secret']);
+  assert.deepEqual(Object.keys(request.questions.personal.criteria),['contact','precise','identity','fake','none']);
+  for(const id of ['personal','financial'])assert.deepEqual(Object.keys(pplx.questions[id].criteria??{}),Object.keys(request.questions[id].criteria??{}));
   assert.deepEqual(request.questions.secret.criteria,{
     password:'password or PIN',token:'API key, access token, or session cookie',otp:'one-time verification code',
     privatekey:'private key or wallet recovery phrase',fake:'only a placeholder, example, or public value',none:'no secret value',
@@ -33,9 +34,10 @@ test('the complete draft stays data inside the two-message context',()=>{
 test('scores require a valid answer for every category and severity stays independent',()=>{
   const {answers}=responseFor();
   assert.ok(readScores({answers}).every(s=>s.detected));
-  answers.name.noul=.99;answers.secret.probabilities.password=.51;answers.financial.noul=.1;
+  answers.personal.probabilities.contact=.99;answers.secret.probabilities.password=.51;answers.financial.noul=.1;
   const scores=readScores({answers});
-  assert.equal(scores.find(c=>c.id==='name').severity,'mild');
+  assert.deepEqual(scores.map(s=>s.id),['contact','precise','financial','identity','credential']);
+  assert.equal(scores.find(c=>c.id==='contact').severity,'mild');
   assert.equal(scores.find(c=>c.id==='credential').severity,'strong');
   assert.equal(scores.find(c=>c.id==='credential').score,.51);
   assert.equal(scores.find(c=>c.id==='financial').detected,false);
@@ -49,31 +51,51 @@ test('scores require a valid answer for every category and severity stays indepe
 test('one credential category preserves Decima alerts without summing scores',()=>{
   const response=responseFor(), p=response.answers.secret.probabilities;
   const credential=()=>readScores(response).find(s=>s.id==='credential');
-  p.password=.3;p.token=.3;p.otp=.3;
+  p.password=.3;p.token=.3;p.otp=.3;p.privatekey=.3;
   assert.equal(credential().score,.3);
   assert.equal(credential().detected,false);
-  for(const key of ['password','token','otp']){
+  for(const key of ['password','token','otp','privatekey']){
     p[key]=.5;assert.equal(credential().detected,true);p[key]=.3;
   }
-  response.answers.secret.max_probabilities={...p,password:.61,token:.72,otp:.83};
+  response.answers.secret.max_probabilities={...p,password:.61,token:.72,otp:.83,privatekey:.94};
   const scores=readScores(response);
-  assert.equal(scores.length,8);
-  assert.equal(scores.find(s=>s.id==='credential').score,.83);
-  assert.equal(scores.some(s=>['password','token','otp'].includes(s.id)),false);
-  for(const value of [undefined,null,NaN,Infinity,-.1,1.1,'0.5']){
-    response.answers.secret.max_probabilities.password=value;
-    assert.throws(()=>readScores(response),/invalidOutput/,'every component must be valid, even below the maximum');
+  assert.equal(scores.length,5);
+  assert.equal(scores.find(s=>s.id==='credential').score,.94);
+  assert.equal(scores.some(s=>['password','token','otp','privatekey'].includes(s.id)),false);
+  for(const key of ['password','token','otp','privatekey']){
+    const original=response.answers.secret.max_probabilities[key];
+    for(const value of [undefined,null,NaN,Infinity,-.1,1.1,'0.5']){
+      response.answers.secret.max_probabilities[key]=value;
+      assert.throws(()=>readScores(response),/invalidOutput/,'every component must be valid, even below the maximum');
+    }
+    response.answers.secret.max_probabilities[key]=original;
   }
 });
-test('Pplx reads its merged option and rejects a response from the wrong question setup',()=>{
-  const response=responseFor('pplx-q4');response.answers.secret.probabilities.credential=.64;
-  assert.equal(readScores(response,'pplx-q4').find(s=>s.id==='credential').score,.64);
-  assert.equal(readScores(response,'pplx-q8').find(s=>s.id==='credential').score,.64);
+test('Pplx folds private keys into credentials without summing scores',()=>{
+  for(const engine of ['pplx-q4','pplx-q8']){
+    const response=responseFor(engine),p=response.answers.secret.probabilities;
+    const credential=()=>readScores(response,engine).find(s=>s.id==='credential');
+    p.credential=.3;p.privatekey=.3;
+    assert.equal(credential().score,.3);assert.equal(credential().detected,false);
+    for(const key of ['credential','privatekey']){
+      p[key]=.5;assert.equal(credential().detected,true);p[key]=.3;
+    }
+    p.credential=.64;assert.equal(credential().score,.64);
+    p.privatekey=.91;assert.equal(credential().score,.91);
+    for(const key of ['credential','privatekey']){
+      const original=p[key];
+      for(const value of [undefined,null,NaN,Infinity,-.1,1.1,'0.5']){
+        p[key]=value;assert.throws(()=>readScores(response,engine),/invalidOutput/);
+      }
+      p[key]=original;
+    }
+  }
+});
+test('models reject a response from the wrong question setup',()=>{
+  const response=responseFor('pplx-q4');
   assert.deepEqual(buildRequest('x','pplx-q8'),buildRequest('x','pplx-q4'));
   assert.throws(()=>readScores(response),/invalidOutput/);
   assert.throws(()=>readScores(responseFor(),'pplx-q4'),/invalidOutput/);
-  delete response.answers.secret.probabilities.credential;
-  assert.throws(()=>readScores(response,'pplx-q4'),/invalidOutput/);
 });
 test('slow inference discards old drafts and coalesces edits into one next request',async()=>{
   const calls=[],published=[],waiting=[];
