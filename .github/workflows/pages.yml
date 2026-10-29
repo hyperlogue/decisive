@@ -10,9 +10,6 @@ on:
       - Cargo.toml
       - Cargo.lock
       - scripts/build_decima_wasm.sh
-      - examples/pplx-flash/runtime.js
-      - examples/pplx-flash/embedding-cache.js
-      - examples/pplx-flash/read-worker.js
       - LICENSE-MIT
       - LICENSE-APACHE
       - NOTICE
@@ -26,9 +23,6 @@ on:
       - Cargo.toml
       - Cargo.lock
       - scripts/build_decima_wasm.sh
-      - examples/pplx-flash/runtime.js
-      - examples/pplx-flash/embedding-cache.js
-      - examples/pplx-flash/read-worker.js
       - LICENSE-MIT
       - LICENSE-APACHE
       - NOTICE
@@ -77,8 +71,7 @@ jobs:
       - name: Test frontend
         run: |
           npm test --prefix browser
-          node browser/node_modules/typescript/bin/tsc -p site/tsconfig.json
-          node --test site/tests/*.test.js
+          npm test --prefix site
           python3 -m unittest discover -s site/tests -p "test_*.py"
 
       - name: Install Rust

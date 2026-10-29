@@ -20,13 +20,16 @@ Requires Python 3, Node 24 with npm (font package and tests), Rust with the `was
 npm ci --prefix browser --ignore-scripts
 npm ci --prefix site --ignore-scripts
 npm test --prefix browser
-node browser/node_modules/typescript/bin/tsc -p site/tsconfig.json
-node --test site/tests/*.test.js
+npm test --prefix site
 DECISIVE_WASM_FEATURES=decima,pplx-flash,wasm,webgpu,pplx-webgpu \
   bash scripts/build_decima_wasm.sh artifacts/web/privacy-build/pkg
 python3 site/build.py --package artifacts/web/privacy-build/pkg
 python3 -m http.server 8768 --directory site/dist
 ```
+
+`npm test --prefix site` rebuilds the browser SDK before compiling the Worker
+and running the site tests, so it also works without generated SDK files from
+a previous build.
 
 The UI uses self-hosted Noto Sans with variable weights, so body text and headings do not depend on locally installed fonts. Noto Sans SC supplies Chinese glyphs, with weight synthesis allowed for its regular-only subsets. Both fonts come from pinned Fontsource packages in `site/package-lock.json`; `build.py` copies their subsets and licenses into `dist/assets/fonts/`. Browsers download only the subsets a page's characters need, and the service worker caches those on first use rather than precaching all of them. Use a fresh runtime output directory for each build. `python3 site/build.py` defaults to `artifacts/web/privacy-build/pkg`, matching the build command above; use `--package` for another output directory. It verifies the binary and recorded source hashes before copying the unchanged runtime. Model weights are not included in the static site. Production hosting needs HTTPS; localhost is supported for development.
 

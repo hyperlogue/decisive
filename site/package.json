@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "pretest": "npm run build --prefix ../browser",
     "test": "node ../browser/node_modules/typescript/bin/tsc -p tsconfig.json && node --test tests/*.test.js",
     "build": "python3 build.py"
   },
