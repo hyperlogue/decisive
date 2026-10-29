@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {selectModel,requirePublished,emptyModelState,validateModelState} from '../lib/model-catalog.js';
 
-test('both models pin their release and exact download size; unpublished entries stay blocked',async()=>{
+test('published models pin their release and exact download size; unpublished entries stay blocked',async()=>{
   const catalog=JSON.parse(await readFile(new URL('../models.json',import.meta.url)));
   const decima=requirePublished(selectModel(catalog));
   assert.equal(decima.id,'decima-small');
